@@ -1,0 +1,83 @@
+2025-09-08 15:47:20.332: my pid: 4089026
+2025-09-08 15:47:20.332: model: model.general_recommender.SGL
+2025-09-08 15:47:20.332: Dataset: amazon, users=2809, items=62121, ratings=110570
+2025-09-08 15:47:20.332: NeuRec:[NeuRec]:
+recommender=SGL
+dataset=amazon
+source_domain=amazon-cd
+target_domain=amazon-kitchen
+file_column=UI
+sep=','
+gpu_id=0
+gpu_mem=0.99
+metric=["Precision", "Recall", "NDCG"]
+top_k=[20]
+test_thread=8
+test_batch_size=128
+seed=2021
+start_testing_epoch=0
+
+SGL:[hyperparameters]:
+aug_type=ED
+reg=1e-4
+embed_size=64
+n_layers=3
+ssl_reg=0.1
+ssl_ratio=0.1
+ssl_temp=0.2
+ssl_mode=both_side
+lr=0.001
+learner=adam
+adj_type=pre
+epochs=1000
+batch_size=2048
+num_negatives=1
+param_init=xavier_uniform
+stddev=0.01
+verbose=1
+stop_cnt=10
+pretrain_flag=0
+save_flag=1
+
+Command line:
+model=SGL
+dataset=amazon
+save_flag=1
+source_domain=amazon-cd
+target_domain=amazon-kitchen
+data_dir=/mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/dataset
+2025-09-08 15:47:21.331: metrics:	Precision@20	Recall@20   	NDCG@20     
+2025-09-08 15:47:25.207: [iter 1 : loss : 1.6426 = 0.6922 + 0.9503 + 0.0000, time: 3.873045]
+2025-09-08 15:47:25.491: epoch 1:	0.00058740  	0.01174795  	0.00571779  
+2025-09-08 15:47:25.491: Find a better model.
+2025-09-08 15:47:25.491: Save model to file as pretrain.
+2025-09-08 15:47:29.004: [iter 2 : loss : 1.6290 = 0.6914 + 0.9376 + 0.0000, time: 3.495517]
+2025-09-08 15:47:29.230: epoch 2:	0.00087220  	0.01744393  	0.00774976  
+2025-09-08 15:47:29.230: Find a better model.
+2025-09-08 15:47:29.230: Save model to file as pretrain.
+2025-09-08 15:47:32.844: [iter 3 : loss : 1.6224 = 0.6906 + 0.9318 + 0.0000, time: 3.521715]
+2025-09-08 15:47:33.229: epoch 3:	0.00083660  	0.01673193  	0.00720555  
+2025-09-08 15:47:36.808: [iter 4 : loss : 1.6190 = 0.6896 + 0.9294 + 0.0000, time: 3.576567]
+2025-09-08 15:47:37.086: epoch 4:	0.00078320  	0.01566394  	0.00588440  
+2025-09-08 15:47:40.595: [iter 5 : loss : 1.6161 = 0.6883 + 0.9277 + 0.0000, time: 3.507734]
+2025-09-08 15:47:40.817: epoch 5:	0.00055180  	0.01103596  	0.00442491  
+2025-09-08 15:47:44.381: [iter 6 : loss : 1.6133 = 0.6864 + 0.9269 + 0.0000, time: 3.549530]
+2025-09-08 15:47:44.588: epoch 6:	0.00037380  	0.00747597  	0.00291456  
+2025-09-08 15:47:48.160: [iter 7 : loss : 1.6100 = 0.6839 + 0.9261 + 0.0000, time: 3.565038]
+2025-09-08 15:47:48.404: epoch 7:	0.00030260  	0.00605198  	0.00203547  
+2025-09-08 15:47:51.896: [iter 8 : loss : 1.6060 = 0.6801 + 0.9258 + 0.0000, time: 3.490472]
+2025-09-08 15:47:52.154: epoch 8:	0.00028480  	0.00569598  	0.00176617  
+2025-09-08 15:47:55.630: [iter 9 : loss : 1.6005 = 0.6750 + 0.9255 + 0.0000, time: 3.474408]
+2025-09-08 15:47:55.876: epoch 9:	0.00028480  	0.00569598  	0.00185342  
+2025-09-08 15:47:59.415: [iter 10 : loss : 1.5936 = 0.6683 + 0.9253 + 0.0000, time: 3.537247]
+2025-09-08 15:47:59.655: epoch 10:	0.00032040  	0.00640797  	0.00249845  
+2025-09-08 15:48:03.182: [iter 11 : loss : 1.5854 = 0.6595 + 0.9259 + 0.0000, time: 3.525446]
+2025-09-08 15:48:03.461: epoch 11:	0.00037380  	0.00747597  	0.00306112  
+2025-09-08 15:48:06.998: [iter 12 : loss : 1.5742 = 0.6483 + 0.9259 + 0.0000, time: 3.534379]
+2025-09-08 15:48:07.238: epoch 12:	0.00048060  	0.00961196  	0.00387048  
+2025-09-08 15:48:07.239: Early stopping is trigger at epoch: 12
+2025-09-08 15:48:07.239: best_result@epoch 2:
+
+2025-09-08 15:48:07.239: Loading from the saved best model during the training process.
+2025-09-08 15:48:07.500: 		0.00087220  	0.01744393  	0.00774976  
+2025-09-08 15:48:07.515: export_final_embeddings done: /mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/dataset/amazon/pretrain-embeddings/SGL/n_layers=3/

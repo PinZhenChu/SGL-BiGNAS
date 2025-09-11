@@ -31,7 +31,15 @@ def _create_logger(config, data_name):
 class AbstractRecommender(object):
     @typeassert(config=Configurator)
     def __init__(self, config):
-        self.dataset = Dataset(config.data_dir, config.dataset, config.sep, config.file_column)
+        self.dataset = Dataset(
+            config.data_dir,
+            config.dataset,
+            config.sep,
+            config.file_column,
+            config=config  # 用 keyword
+        )
+
+
         self.logger = self._create_logger(config, self.dataset)
 
         user_train_dict = self.dataset.train_data.to_user_dict()
