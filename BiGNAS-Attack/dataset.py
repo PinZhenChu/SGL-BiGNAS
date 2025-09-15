@@ -133,8 +133,9 @@ class CrossDomain(Dataset):
         source_item_index = {}
         for idx, item in enumerate(source_df["item"].unique()):
             source_item_index[item] = idx
+        # === Source domain ===
         source_df["item"] = source_df["item"].apply(lambda x: source_item_index[x])
-        source_df["item"] += len(user_index)
+        source_df["item"] += len(user_index)  # source item 範圍: [num_users, num_users+num_source_items-1]
 
         source_label = torch.tensor(source_df["click"].values, dtype=torch.float)
         source_link = torch.tensor(
@@ -146,8 +147,10 @@ class CrossDomain(Dataset):
         target_item_index = {}
         for idx, item in enumerate(target_df["item"].unique()):
             target_item_index[item] = idx
+        # === Target domain ===
         target_df["item"] = target_df["item"].apply(lambda x: target_item_index[x])
-        target_df["item"] += len(user_index)
+        target_df["item"] += len(user_index) + len(source_item_index)  
+        # target item 範圍: [num_users+num_source_items, num_users+num_source_items+num_target_items-1]
 
         target_label = torch.tensor(target_df["click"].values, dtype=torch.float)
         target_link = torch.tensor(

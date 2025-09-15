@@ -47,11 +47,11 @@ def find_recommender(recommender):
 if __name__ == "__main__":
     is_windows = sys.platform.startswith('win')
     if is_windows:
-        root_dir = '/mnt/sda1/yuxin/project/SGL-Torch'
-        data_dir = '/mnt/sda1/yuxin/project/SGL-Torch/dataset/'
+        root_dir = '/mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch'
+        data_dir = '//mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/dataset/'
     else:
-        root_dir = '/mnt/sda1/yuxin/project/SGL-Torch/'
-        data_dir = '/mnt/sda1/yuxin/project/SGL-Torch/dataset/'
+        root_dir = '/mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/'
+        data_dir = '/mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/dataset/'
     config = Configurator(root_dir, data_dir)
     config.add_config(root_dir + "NeuRec.ini", section="NeuRec")
     config.parse_cmd()
