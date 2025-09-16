@@ -107,69 +107,36 @@ def _sampling_negative_items(user_n_pos, num_neg, num_items, user_pos_dict):
 
 @typeassert(user_pos_dict=OrderedDict, num_samples=int, num_item=int)
 def _pairwise_sampling_v2(user_pos_dict, num_samples, num_item):
-    if not isinstance(user_pos_dict, dict):
-        raise TypeError("'user_pos_dict' must be a dict.")
-
     if not user_pos_dict:
         raise ValueError("'user_pos_dict' cannot be empty.")
 
-    user_arr = np.array(list(user_pos_dict.keys()), dtype=np.int32)
+    # 強制轉成 int key
+    user_arr = np.array([int(u) for u in user_pos_dict.keys()], dtype=np.int64)
     user_idx = randint_choice(len(user_arr), size=num_samples, replace=True)
     users_list = user_arr[user_idx]
 
-    # count the number of each user, i.e., the numbers of positive and negative items for each user
-    user_pos_len = defaultdict(int)
-    for u in users_list:
-        user_pos_len[u] += 1
+    pos_items_list, neg_items_list, final_users = [], [], []
 
-    user_pos_sample = dict()
-    user_neg_sample = dict()
-    for user, pos_len in user_pos_len.items():
-        try:
-            pos_items = user_pos_dict[user]
-            pos_idx = randint_choice(len(pos_items), size=pos_len, replace=True)
-            pos_idx = pos_idx if isinstance(pos_idx, Iterable) else [pos_idx]
-            user_pos_sample[user] = list(pos_items[pos_idx])
-
-            neg_items = randint_choice(num_item, size=pos_len, replace=True, exclusion=user_pos_dict[user])
-            user_neg_sample[user] = neg_items if isinstance(neg_items, Iterable) else [neg_items]
-        except:
-            print('error')
-
-    # 修復的關鍵部分：安全地處理 pop 操作
-    pos_items_list = []
-    neg_items_list = []
-    
     for user in users_list:
-        # 檢查用戶是否在樣本字典中且有可用項目
-        if user in user_pos_sample and len(user_pos_sample[user]) > 0:
-            pos_item = user_pos_sample[user].pop()
-            pos_items_list.append(pos_item)
-        else:
-            # 如果沒有可用的正樣本，從原始字典中隨機選一個
-            if user in user_pos_dict and len(user_pos_dict[user]) > 0:
-                pos_item = np.random.choice(user_pos_dict[user])
-                pos_items_list.append(pos_item)
-            else:
-                # 極端情況：用戶完全沒有正樣本，跳過或用備用方案
-                print(f'Warning: User {user} has no positive items, skipping.')
-                continue
-        
-        # 處理負樣本
-        if user in user_neg_sample and len(user_neg_sample[user]) > 0:
-            neg_item = user_neg_sample[user].pop()
-            neg_items_list.append(neg_item)
-        else:
-            # 生成一個新的負樣本
-            neg_item = np.random.randint(num_item)
-            while user in user_pos_dict and neg_item in user_pos_dict[user]:
-                neg_item = np.random.randint(num_item)
-            neg_items_list.append(neg_item)
+        user = int(user)
+        if user not in user_pos_dict or len(user_pos_dict[user]) == 0:
+            # 該 user 沒正樣本，跳過
+            continue
 
-    # 確保返回的列表長度一致
-    final_users = users_list[:len(pos_items_list)]
-    
-    return final_users, pos_items_list, neg_items_list
+        # 正樣本隨機取一個
+        pos_item = np.random.choice(list(user_pos_dict[user]))
+        pos_items_list.append(int(pos_item))
+
+        # 負樣本隨機取直到不在正樣本集合
+        neg_item = np.random.randint(num_item)
+        while neg_item in user_pos_dict[user]:
+            neg_item = np.random.randint(num_item)
+        neg_items_list.append(int(neg_item))
+
+        final_users.append(user)
+
+    return np.array(final_users), pos_items_list, neg_items_list
+
 
 
 class PointwiseSampler(Sampler):
