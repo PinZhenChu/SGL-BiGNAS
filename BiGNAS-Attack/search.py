@@ -13,6 +13,32 @@ from dataset import CrossDomain
 from model import Model, Perceptor
 from train import train
 
+def debug_cold_item_counts(split_result, cold_item_id):
+    """
+    Debug: 計算冷門商品在 train/valid/test 出現次數
+    split_result: link_split() 的回傳結果
+        - 包含 target_train_edge_index, target_valid_edge_index, target_test_edge_index
+    cold_item_id: int, target domain 冷門商品 index
+    """
+    # === train ===
+    train_edges = split_result['target_train_edge_index']
+    train_count = (train_edges[1] == cold_item_id).sum().item()
+
+    # === valid ===
+    valid_edges = split_result['target_valid_edge_index']
+    valid_count = (valid_edges[1] == cold_item_id).sum().item()
+
+    # === test ===
+    test_edges = split_result['target_test_edge_index']
+    test_count = (test_edges[1] == cold_item_id).sum().item()
+
+    print(f"[DEBUG] cold_item_id={cold_item_id}")
+    print(f"  train 出現次數: {train_count}")
+    print(f"  valid 出現次數: {valid_count}")
+    print(f"  test  出現次數: {test_count}")
+
+    return train_count, valid_count, test_count
+
 
 def search(args):
     args.search = True
@@ -81,7 +107,8 @@ def search(args):
         )
 
         # 讀 SGL 輸出的 target user embedding
-        user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_final.npy")
+        # user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_final.npy")
+        user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_loss-Way2-1.npy")
         if not os.path.exists(user_emb_target_path):
             raise FileNotFoundError(f"[HardUser] 找不到 SGL user embedding：{user_emb_target_path}")
 
@@ -105,6 +132,10 @@ def search(args):
             f"E_add_source={summary['E_add_source'].shape[1]}, "
             f"E_add_target={summary['E_add_target'].shape[1]}"
         )
+        # 假設 split_result 已經從 link_split(data) 得到
+        cold_item_id = args.cold_item_id
+        debug_cold_item_counts(split_result, cold_item_id)
+
         def check_edge_index(edge_index, num_users, num_source_items, name):
             if edge_index is None or edge_index.numel() == 0:
                 logging.info(f"[{name}] empty (skip check)")
