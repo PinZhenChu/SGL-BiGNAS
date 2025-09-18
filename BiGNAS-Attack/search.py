@@ -108,12 +108,12 @@ def search(args):
 
         # 讀 SGL 輸出的 target user embedding
         # user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_final.npy")
-        user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_loss-Way2-1.npy")
+        user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_final.npy")
         if not os.path.exists(user_emb_target_path):
             raise FileNotFoundError(f"[HardUser] 找不到 SGL user embedding：{user_emb_target_path}")
 
         user_emb_target = torch.tensor(np.load(user_emb_target_path), dtype=torch.float)
-        
+
         # 執行加邊，得到 ΔE
         summary = injector.run(
             split_result=split_result,
@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
     # 讀 target domain 的 SGL user embedding（只需 user）
     parser.add_argument("--sgl-dir-target", type=str,
-        default="/mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/dataset/amazon-cd/pretrain-embeddings/SGL/n_layers=3",
+        default="/mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/dataset/amazon/pretrain-embeddings/SGL/n_layers=3",
         help="target domain 的 SGL 輸出資料夾，內含 user_embeddings_final.npy")
 
     args = parser.parse_args()

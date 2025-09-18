@@ -159,32 +159,35 @@ class HardUserInjector:
                 logging.warning(f"[HardUser] 移除 {E_target.size(1) - mask.sum().item()} 條越界 target 假邊")
             E_add_target = E_target[:, mask]
 
-        # === Step 5: Source domain 假邊（比例抽樣） ===
+
+        # === Step 5: Source domain 假邊（方法一：依熱門程度依序加邊 + 保留比例） ===
         E_add_source = torch.empty((2, 0), dtype=torch.long)
-        if edge_ratio_source > 0 and len(hard_users) > 0:
-            ranked_items = self._rank_source_items_by_groupA(source_train_edge_index, groupA, num_source_items)
+        if len(hard_users) > 0:
+            ranked_items = self._rank_source_items_by_groupA(
+                source_train_edge_index, groupA, num_source_items
+            )
             if not ranked_items:
-                ranked_items = list(range(num_source_items))
+                logging.warning("[HardUser] GroupA 無 source item 購買紀錄 → 不產生 ΔE")
+            else:
+                exist_s = _tensor2set(source_train_edge_index)
+                cand_pairs = []
+                # ✅ 照熱門程度依序建候選 (最熱門優先)
+                for i in ranked_items:       # item 排序已是 desc
+                    for u in hard_users:
+                        p = (int(u), int(i))
+                        if p not in exist_s: # 避免重複邊
+                            cand_pairs.append(p)
 
-            exist_s = _tensor2set(source_train_edge_index)
-            cand_pairs = []
-            for u in hard_users:
-                for i in ranked_items:
-                    p = (int(u), int(i))
-                    if p not in exist_s:
-                        cand_pairs.append(p)
+                if len(cand_pairs) > 0:
+                    # ✅ 保留 edge_ratio_source 比例（取前 keep 條，不隨機）
+                    keep = max(1, int(len(cand_pairs) * edge_ratio_source))
+                    picked = cand_pairs[:keep]   # 直接取前 keep
+                    E_add_source = torch.tensor(picked, dtype=torch.long).t()
 
-            if len(cand_pairs) > 0:
-                keep = max(1, int(len(cand_pairs) * edge_ratio_source))
-                idx = torch.randperm(len(cand_pairs))[:keep].tolist()
-                picked = [cand_pairs[j] for j in idx]
-                E_add_source = torch.tensor(picked, dtype=torch.long).t()
-
-                # 邊界檢查
-                mask = (E_add_source[1] >= 0) & (E_add_source[1] < num_source_items)
-                if mask.sum().item() < E_add_source.size(1):
-                    logging.warning(f"[HardUser] 移除 {E_add_source.size(1) - mask.sum().item()} 條越界 source 假邊")
-                E_add_source = E_add_source[:, mask]
+                    logging.info(
+                        f"[HardUser] 共 {len(cand_pairs)} 條候選邊 (已按熱門排序)，"
+                        f"edge_ratio_source={edge_ratio_source:.2f} → 保留前 {keep} 條"
+                    )
 
         # === Step 6: 存檔 & log ===
         np.save(os.path.join(self.log_dir, "E_add_source.npy"), E_add_source.cpu().numpy())
