@@ -251,7 +251,7 @@ if __name__ == "__main__":
 
     # 讀 target domain 的 SGL user embedding（只需 user）
     parser.add_argument("--sgl-dir-target", type=str,
-        default="/mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/dataset/amazon/pretrain-embeddings/SGL/n_layers=3",
+        default="/mnt/sda1/yuxin/SGL-BiGNAS/SGL-Torch/dataset/all_data/pretrain-embeddings/SGL/n_layers=3",
         help="target domain 的 SGL 輸出資料夾，內含 user_embeddings_final.npy")
 
     args = parser.parse_args()
