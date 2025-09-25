@@ -52,7 +52,7 @@ class Interaction(object):
     def to_user_dict(self, by_time=False):
         if self._data.empty:
             warnings.warn("self._data is empty.")
-            return None
+            return {}
         user_dict = OrderedDict()
         user_grouped = self._data.groupby(_USER)
         for user, user_data in user_grouped:
@@ -68,8 +68,14 @@ class Interaction(object):
 class Dataset(object):
     def __init__(self, data_dir, dataset_name, sep, columns, config=None):
         self.data_name = dataset_name
-        self.source_domain = config["source_domain"]
-        self.target_domain = config["target_domain"]
+        if self.data_name == 'all_data':
+            self.source_domain = None
+            self.target_domain = None
+        else:
+            self.source_domain = config["source_domain"]
+            self.target_domain = config["target_domain"]
+        # self.source_domain = config["source_domain"]
+        # self.target_domain = config["target_domain"]
 
         # metadata
         self.train_data = Interaction()
@@ -90,6 +96,30 @@ class Dataset(object):
             raise ValueError(f"'columns' must be one of {list(_column_dict.keys())}")
         columns = _column_dict[columns]
 
+        # === 若 dataset_name == 'all_data'，只讀 all_data.train ===
+        if getattr(self, 'data_name', None) == 'all_data':
+            all_data_file = os.path.join(data_dir, 'all_data.train')
+            if not os.path.isfile(all_data_file):
+                raise FileNotFoundError(f"{all_data_file} not found!")
+            _train_data = pd.read_csv(all_data_file, sep=sep, header=None, names=columns)
+            print(f"[INFO] Loaded {all_data_file}, {len(_train_data)} interactions")
+            _valid_data = pd.DataFrame()
+            _test_data = pd.DataFrame()
+            all_data = _train_data
+            self.num_users = max(all_data[_USER]) + 1
+            self.num_items = max(all_data[_ITEM]) + 1
+            self.num_ratings = len(all_data)
+            self.num_train_ratings = len(_train_data)
+            self.train_data = Interaction(_train_data, num_users=self.num_users, num_items=self.num_items)
+            self.valid_data = Interaction(_valid_data, num_users=self.num_users, num_items=self.num_items)
+            self.test_data = Interaction(_test_data, num_users=self.num_users, num_items=self.num_items)
+            self.num_source_items = 0
+            self.num_target_items = 0
+            print(f"[INFO] Final merged train size: {len(self.train_data)} interactions")
+            print(f"[INFO] num_users={self.num_users}, num_items={self.num_items}")
+            return
+
+        # ...原本的 source/target domain 處理...
         # ====== Source domain ======
         src_prefix = os.path.join(data_dir, self.source_domain, self.source_domain)
         src_files = [src_prefix + ".train", src_prefix + ".valid", src_prefix + ".test"]

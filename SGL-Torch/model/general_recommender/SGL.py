@@ -26,6 +26,34 @@ import scipy.sparse as sp
 from util.common import normalize_adj_matrix, ensureDir
 from util.pytorch import sp_mat_to_sp_tensor
 from reckit import randint_choice
+import os
+
+# === Group Contrastive Loss ===
+def group_contrastive_loss(user_embs1, user_embs2, user_ids, user_group_tensor, margin=0.5):
+    device = user_embs1.device
+    user_group_tensor = user_group_tensor.to(user_ids.device)
+    groups = user_group_tensor[user_ids]  # [batch_size]
+    sim_matrix = F.cosine_similarity(user_embs1.unsqueeze(1), user_embs2.unsqueeze(0), dim=2)  # [batch, batch]
+    batch_size = user_embs1.size(0)
+    hardest_pos = []
+    hardest_neg = []
+    for i in range(batch_size):
+        pos_mask = (groups[i] == groups) & (torch.arange(batch_size, device=device) != i)
+        neg_mask = (groups[i] != groups)
+        pos_sims = sim_matrix[i][pos_mask]
+        neg_sims = sim_matrix[i][neg_mask]
+        if pos_sims.numel() > 0:
+            hardest_pos.append(pos_sims.min())
+        else:
+            hardest_pos.append(torch.tensor(0.0, device=device))
+        if neg_sims.numel() > 0:
+            hardest_neg.append(neg_sims.max())
+        else:
+            hardest_neg.append(torch.tensor(0.0, device=device))
+    hardest_pos = torch.stack(hardest_pos)
+    hardest_neg = torch.stack(hardest_neg)
+    loss = F.relu(margin + hardest_neg - hardest_pos).mean()
+    return loss
 
 
 class _LightGCN(nn.Module):
@@ -186,6 +214,11 @@ class SGL(AbstractRecommender):
 
         self.num_users, self.num_items, self.num_ratings = self.dataset.num_users, self.dataset.num_items, self.dataset.num_train_ratings
 
+        # === 指定 Group A: 買過 target item 的 users ===
+        group_a_ids = [50, 98, 118, 191, 260, 550, 735, 947, 1175, 1615]
+        self.user_group_tensor = torch.zeros(self.num_users, dtype=torch.long)
+        self.user_group_tensor[group_a_ids] = 1  # 1: Group A, 0: 其他
+
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         adj_matrix = self.create_adj_mat()
         adj_matrix = sp_mat_to_sp_tensor(adj_matrix).to(self.device)
@@ -284,7 +317,15 @@ class SGL(AbstractRecommender):
                 clogits_item = torch.logsumexp(ssl_logits_item / self.ssl_temp, dim=1)
                 infonce_loss = torch.sum(clogits_user + clogits_item)
                 
-                loss = bpr_loss + self.ssl_reg * infonce_loss + self.reg * reg_loss
+                # === Group Contrastive Loss ===
+                user_embs1 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph1)[0], dim=1))
+                user_embs2 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph2)[0], dim=1))
+                user_group_tensor = self.user_group_tensor.to(bat_users.device)
+                group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users, user_group_tensor, margin=0.5)
+                alpha = 1.0  # 可調整權重
+                loss = bpr_loss + self.ssl_reg * infonce_loss + self.reg * reg_loss + alpha * group_loss
+                # === Group Contrastive Loss ===
+                
                 total_loss += loss
                 total_bpr_loss += bpr_loss
                 total_reg_loss += self.reg * reg_loss
@@ -319,13 +360,23 @@ class SGL(AbstractRecommender):
         ### 匯出「傳播後」的向量
         self.logger.info("best_result@epoch %d:\n" % self.best_epoch)
         if self.save_flag:
-            self.logger.info('Loading from the saved best model during the training process.')
-            self.lightgcn.load_state_dict(torch.load(self.tmp_model_dir + 'best_model.pth'))
-            uebd = self.lightgcn.user_embeddings.weight.cpu().detach().numpy()
-            iebd = self.lightgcn.item_embeddings.weight.cpu().detach().numpy()
-            np.save(self.save_dir + 'user_embeddings.npy', uebd)
-            np.save(self.save_dir + 'item_embeddings.npy', iebd)
-            buf, _ = self.evaluate_model()
+            import os
+            best_model_path = self.tmp_model_dir + 'best_model.pth'
+            if os.path.exists(best_model_path):
+                self.logger.info('Loading from the saved best model during the training process.')
+                self.lightgcn.load_state_dict(torch.load(best_model_path))
+                uebd = self.lightgcn.user_embeddings.weight.cpu().detach().numpy()
+                iebd = self.lightgcn.item_embeddings.weight.cpu().detach().numpy()
+                np.save(self.save_dir + 'user_embeddings.npy', uebd)
+                np.save(self.save_dir + 'item_embeddings.npy', iebd)
+                buf, _ = self.evaluate_model()
+            else:
+                self.logger.warning(f"No best_model.pth found at {best_model_path}, skip loading best model. Export embedding from current model.")
+                uebd = self.lightgcn.user_embeddings.weight.cpu().detach().numpy()
+                iebd = self.lightgcn.item_embeddings.weight.cpu().detach().numpy()
+                np.save(self.save_dir + 'user_embeddings.npy', uebd)
+                np.save(self.save_dir + 'item_embeddings.npy', iebd)
+                buf = 'No best model, export from current model.'
         elif self.pretrain_flag:
             buf, _ = self.evaluate_model()
         else:
@@ -342,6 +393,8 @@ class SGL(AbstractRecommender):
 
     # @timer
     def evaluate_model(self):
+        if not self.dataset.test_data or len(self.dataset.test_data) == 0:
+            return "No test data", False
         flag = False
         self.lightgcn.eval()
         current_result, buf = self.evaluator.evaluate(self)
