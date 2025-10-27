@@ -181,9 +181,18 @@ class SGL(AbstractRecommender):
         self.ssl_mode = config["ssl_mode"]
         self.ssl_temp = config["ssl_temp"]
 
+        # Hyper-parameters for Group Contrastive Loss
+        self.alpha_values = [0.0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]  # 測試不同的 alpha 值
+        self.current_alpha_idx = 0  # 從 alpha=0.0 開始
+        self.alpha_results = {}  # 儲存每個 alpha 的平均 loss
+        self.alpha_search_epochs = 20  # 每個 alpha 測試的 epoch 數
+        self.alpha_losses = []  # 記錄當前 alpha 的 loss
+        
         # Other hyper-parameters
         self.best_epoch = 0
         self.best_result = np.zeros([2], dtype=float)
+        self.best_alpha = 0.0
+        self.best_loss = float('inf')
 
         self.model_str = 'layers_%d_reg_%.0e' % (
             self.n_layers,
@@ -322,8 +331,10 @@ class SGL(AbstractRecommender):
                 user_embs2 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph2)[0], dim=1))
                 user_group_tensor = self.user_group_tensor.to(bat_users.device)
                 group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users, user_group_tensor, margin=0.5)
-                alpha = 1.0  # 可調整權重
-                loss = bpr_loss + self.ssl_reg * infonce_loss + self.reg * reg_loss + alpha * group_loss
+                
+                # 動態調整 alpha 值
+                current_alpha = self.alpha_values[self.current_alpha_idx]
+                loss = bpr_loss + self.ssl_reg * infonce_loss + self.reg * reg_loss + current_alpha * group_loss
                 # === Group Contrastive Loss ===
                 
                 total_loss += loss
@@ -333,31 +344,102 @@ class SGL(AbstractRecommender):
                 loss.backward()
                 self.optimizer.step()
 
-            self.logger.info("[iter %d : loss : %.4f = %.4f + %.4f + %.4f, time: %f]" % (
+            current_alpha = self.alpha_values[self.current_alpha_idx]
+            current_loss = total_loss.item() / self.num_ratings
+            self.alpha_losses.append(current_loss)
+            
+            self.logger.info("[iter %d : loss : %.4f = %.4f + %.4f + %.4f, alpha: %.2f, time: %f]" % (
                 epoch, 
-                total_loss/self.num_ratings,
+                current_loss,
                 total_bpr_loss / self.num_ratings,
                 (total_loss - total_bpr_loss - total_reg_loss) / self.num_ratings,
                 total_reg_loss / self.num_ratings,
+                current_alpha,
                 time()-training_start_time,))
 
-            if epoch % self.verbose == 0 and epoch > self.config['start_testing_epoch']:
-                result, flag = self.evaluate_model()
-                self.logger.info("epoch %d:\t%s" % (epoch, result))
-                if flag:
-                    self.best_epoch = epoch
-                    stopping_step = 0
-                    self.logger.info("Find a better model.")
-                    if self.save_flag:
-                        self.logger.info("Save model to file as pretrain.")
-                        torch.save(self.lightgcn.state_dict(), self.tmp_model_dir + 'best_model.pth')
-                        # self.saver.save(self.sess, self.tmp_model_dir)
+            # 檢查是否需要切換到下一個 alpha 值
+            if epoch % self.alpha_search_epochs == 0 and epoch > 0:
+                # 計算當前 alpha 的平均 loss
+                avg_loss = np.mean(self.alpha_losses)
+                self.alpha_results[current_alpha] = avg_loss
+                self.logger.info("Alpha %.2f average loss: %.4f" % (current_alpha, avg_loss))
+                
+                # 檢查是否為最佳 loss
+                if avg_loss < self.best_loss:
+                    self.best_loss = avg_loss
+                    self.best_alpha = current_alpha
+                    self.logger.info("New best alpha: %.2f with loss: %.4f" % (current_alpha, avg_loss))
+                
+                # 切換到下一個 alpha
+                self.current_alpha_idx += 1
+                if self.current_alpha_idx < len(self.alpha_values):
+                    self.logger.info("Switching to alpha=%.2f" % self.alpha_values[self.current_alpha_idx])
+                    self.alpha_losses = []  # 重置 loss 記錄
                 else:
-                    stopping_step += 1
-                    if stopping_step >= self.stop_cnt:
-                        self.logger.info("Early stopping is trigger at epoch: {}".format(epoch))
-                        break
-        ### 匯出「傳播後」的向量
+                    self.logger.info("=== Alpha Search Complete ===")
+                    self.logger.info("Best alpha: %.2f with average loss: %.4f" % (self.best_alpha, self.best_loss))
+                    for alpha in sorted(self.alpha_results.keys()):
+                        loss = self.alpha_results[alpha]
+                        marker = " <- BEST" if alpha == self.best_alpha else ""
+                        self.logger.info("Alpha %.2f: %.4f%s" % (alpha, loss, marker))
+                    break
+        ### 使用最佳 alpha 重新訓練並匯出「傳播後」的向量
+        self.logger.info("=== Training with Best Alpha ===")
+        self.logger.info("Using best alpha: %.2f (loss: %.4f)" % (self.best_alpha, self.best_loss))
+        
+        # 重新設定為最佳 alpha
+        self.current_alpha_idx = self.alpha_values.index(self.best_alpha)
+        
+        # 用最佳 alpha 再訓練幾個 epoch
+        final_epochs = 10
+        for epoch in range(final_epochs):
+            total_loss = 0.0
+            training_start_time = time()
+            if self.ssl_aug_type in ['nd', 'ed']:
+                sub_graph1 = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
+                sub_graph1 = sp_mat_to_sp_tensor(sub_graph1).to(self.device)
+                sub_graph2 = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
+                sub_graph2 = sp_mat_to_sp_tensor(sub_graph2).to(self.device)
+            else:
+                sub_graph1, sub_graph2 = [], []
+                for _ in range(0, self.n_layers):
+                    tmp_graph = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
+                    sub_graph1.append(sp_mat_to_sp_tensor(tmp_graph).to(self.device))
+                    tmp_graph = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
+                    sub_graph2.append(sp_mat_to_sp_tensor(tmp_graph).to(self.device))
+            
+            self.lightgcn.train()
+            for bat_users, bat_pos_items, bat_neg_items in data_iter:
+                bat_users = torch.from_numpy(bat_users).long().to(self.device)
+                bat_pos_items = torch.from_numpy(bat_pos_items).long().to(self.device)
+                bat_neg_items = torch.from_numpy(bat_neg_items).long().to(self.device)
+                sup_logits, ssl_logits_user, ssl_logits_item = self.lightgcn(
+                    sub_graph1, sub_graph2, bat_users, bat_pos_items, bat_neg_items)
+                
+                bpr_loss = -torch.sum(F.logsigmoid(sup_logits))
+                reg_loss = l2_loss(
+                    self.lightgcn.user_embeddings(bat_users),
+                    self.lightgcn.item_embeddings(bat_pos_items),
+                    self.lightgcn.item_embeddings(bat_neg_items),
+                )
+                clogits_user = torch.logsumexp(ssl_logits_user / self.ssl_temp, dim=1)
+                clogits_item = torch.logsumexp(ssl_logits_item / self.ssl_temp, dim=1)
+                infonce_loss = torch.sum(clogits_user + clogits_item)
+                
+                user_embs1 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph1)[0], dim=1))
+                user_embs2 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph2)[0], dim=1))
+                user_group_tensor = self.user_group_tensor.to(bat_users.device)
+                group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users, user_group_tensor, margin=0.5)
+                
+                loss = bpr_loss + self.ssl_reg * infonce_loss + self.reg * reg_loss + self.best_alpha * group_loss
+                total_loss += loss
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+            
+            self.logger.info("[Final training %d/%d : loss : %.4f, alpha: %.2f, time: %f]" % (
+                epoch + 1, final_epochs, total_loss.item() / self.num_ratings, self.best_alpha, time()-training_start_time))
+        
         self.logger.info("best_result@epoch %d:\n" % self.best_epoch)
         if self.save_flag:
             import os

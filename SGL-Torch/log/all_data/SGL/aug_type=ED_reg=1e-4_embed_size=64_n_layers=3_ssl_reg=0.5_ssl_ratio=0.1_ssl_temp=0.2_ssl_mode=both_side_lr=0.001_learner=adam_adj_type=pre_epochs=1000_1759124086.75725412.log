@@ -1,0 +1,67 @@
+2025-09-29 13:34:46.757: my pid: 130375
+2025-09-29 13:34:46.757: model: model.general_recommender.SGL
+2025-09-29 13:34:46.757: Dataset: all_data, users=2809, items=31062, ratings=110570
+2025-09-29 13:34:46.757: NeuRec:[NeuRec]:
+recommender=SGL
+dataset=all_data
+source_domain=amazon-cd
+target_domain=amazon-kitchen
+file_column=UI
+sep=','
+gpu_id=0
+gpu_mem=0.99
+metric=["Precision", "Recall", "NDCG"]
+top_k=[20]
+test_thread=8
+test_batch_size=128
+seed=2021
+start_testing_epoch=0
+
+SGL:[hyperparameters]:
+aug_type=ED
+reg=1e-4
+embed_size=64
+n_layers=3
+ssl_reg=0.5
+ssl_ratio=0.1
+ssl_temp=0.2
+ssl_mode=both_side
+lr=0.001
+learner=adam
+adj_type=pre
+epochs=1000
+batch_size=2048
+num_negatives=1
+param_init=xavier_uniform
+stddev=0.01
+verbose=1
+stop_cnt=10
+pretrain_flag=0
+save_flag=0
+
+Command line:
+recommender=SGL
+dataset=all_data
+aug_type=ED
+reg=1e-4
+n_layers=3
+ssl_reg=0.5
+ssl_ratio=0.1
+ssl_temp=0.2
+2025-09-29 13:34:47.447: metrics:	Precision@20	Recall@20   	NDCG@20     
+2025-09-29 13:35:36.898: [iter 1 : loss : 5.0464 = 0.6920 + 4.3543 + 0.0000, alpha: 1.00, time: 49.450554]
+2025-09-29 13:35:36.898: epoch 1 (alpha=1.00):	No test data
+2025-09-29 13:36:26.299: [iter 2 : loss : 5.0033 = 0.6914 + 4.3119 + 0.0000, alpha: 1.00, time: 49.191459]
+2025-09-29 13:36:26.299: epoch 2 (alpha=1.00):	No test data
+2025-09-29 13:37:15.699: [iter 3 : loss : 4.9832 = 0.6908 + 4.2924 + 0.0000, alpha: 1.00, time: 49.201276]
+2025-09-29 13:37:15.700: epoch 3 (alpha=1.00):	No test data
+2025-09-29 13:38:05.112: [iter 4 : loss : 4.9760 = 0.6904 + 4.2856 + 0.0000, alpha: 1.00, time: 49.211313]
+2025-09-29 13:38:05.112: epoch 4 (alpha=1.00):	No test data
+2025-09-29 13:38:54.755: [iter 5 : loss : 4.9713 = 0.6900 + 4.2813 + 0.0000, alpha: 1.00, time: 49.443477]
+2025-09-29 13:38:54.755: epoch 5 (alpha=1.00):	No test data
+2025-09-29 13:39:44.797: [iter 6 : loss : 4.9677 = 0.6896 + 4.2781 + 0.0000, alpha: 1.00, time: 49.842078]
+2025-09-29 13:39:44.797: epoch 6 (alpha=1.00):	No test data
+2025-09-29 13:40:34.692: [iter 7 : loss : 4.9644 = 0.6891 + 4.2754 + 0.0000, alpha: 1.00, time: 49.705969]
+2025-09-29 13:40:34.692: epoch 7 (alpha=1.00):	No test data
+2025-09-29 13:41:24.703: [iter 8 : loss : 4.9623 = 0.6886 + 4.2737 + 0.0000, alpha: 1.00, time: 49.819305]
+2025-09-29 13:41:24.703: epoch 8 (alpha=1.00):	No test data
