@@ -28,6 +28,47 @@ from util.pytorch import sp_mat_to_sp_tensor
 from reckit import randint_choice
 import os
 
+
+### User-Aware Temperature Scaling for InfoNCE Loss
+class UserAwareTemp:
+    """
+    逐樣本溫度排程器：
+    mode="enhance_low": 強化低活躍（低互動者 tau 變小，對比更強）
+    mode="suppress_low": 抑制低活躍（低互動者 tau 變大，對比更弱）
+    mode="fixed": 固定溫度
+    """
+    def __init__(self, tau_base=0.2, mode="enhance_low",
+                 alpha=0.5, beta=0.3, gamma=0.7,
+                 min_tau=0.03, max_tau=1.0):
+        self.tau_base = tau_base
+        self.mode = mode
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
+        self.min_tau = min_tau
+        self.max_tau = max_tau
+
+    def __call__(self, user_activity_vec: torch.Tensor) -> torch.Tensor:
+        ua = torch.clamp(user_activity_vec, min=0.0)
+        if self.mode == "suppress_low":
+            tau_i = self.tau_base * (1.0 + self.alpha * torch.exp(-self.beta * ua))
+        elif self.mode == "enhance_low":
+            tau_i = self.tau_base / (1.0 + self.gamma * torch.log1p(ua))
+        else:
+            tau_i = torch.full_like(ua, self.tau_base)
+        return torch.clamp(tau_i, min=self.min_tau, max=self.max_tau)
+
+
+def user_aware_infonce_from_logits(logits: torch.Tensor, tau_vec: torch.Tensor,
+                                   reduction="sum") -> torch.Tensor:
+    """
+    logits: [B, B]，第 i 行第 i 列為正樣本（對角線）
+    tau_vec: [B]，逐列的溫度
+    """
+    logits = logits / tau_vec.unsqueeze(1)  # row-wise 溫度縮放
+    labels = torch.arange(logits.size(0), device=logits.device)
+    return F.cross_entropy(logits, labels, reduction=reduction)
+
 # === Group Contrastive Loss ===
 def group_contrastive_loss(user_embs1, user_embs2, user_ids, user_group_tensor, margin=0.5):
     device = user_embs1.device
@@ -175,34 +216,28 @@ class SGL(AbstractRecommender):
 
         # Hyper-parameters for SSL
         self.ssl_aug_type = config["aug_type"].lower()
-        assert self.ssl_aug_type in ['nd','ed', 'rw']
+        assert self.ssl_aug_type in ['nd', 'ed', 'rw']
         self.ssl_reg = config["ssl_reg"]
         self.ssl_ratio = config["ssl_ratio"]
         self.ssl_mode = config["ssl_mode"]
         self.ssl_temp = config["ssl_temp"]
 
         # Hyper-parameters for Group Contrastive Loss
-        self.alpha_values = [0.0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]  # 測試不同的 alpha 值
-        self.current_alpha_idx = 0  # 從 alpha=0.0 開始
-        self.alpha_results = {}  # 儲存每個 alpha 的平均 loss
-        self.alpha_search_epochs = 20  # 每個 alpha 測試的 epoch 數
-        self.alpha_losses = []  # 記錄當前 alpha 的 loss
-        
-        # Other hyper-parameters
+        self.alpha_values = [0.0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
+        self.current_alpha_idx = 0
+        self.alpha_results = {}
+        self.alpha_search_epochs = 20
+        self.alpha_losses = []
+
+        # Other
         self.best_epoch = 0
-        self.best_result = np.zeros([2], dtype=float)
+        self.best_result = np.zeros([2], dtype=float)  # 保留欄位但不使用評估
         self.best_alpha = 0.0
         self.best_loss = float('inf')
 
-        self.model_str = 'layers_%d_reg_%.0e' % (
-            self.n_layers,
-            self.reg
-        )
+        self.model_str = 'layers_%d_reg_%.0e' % (self.n_layers, self.reg)
         self.model_str += '/ratio_%.1f_mode_%s_temp_%.2f_reg_%.0e' % (
-            self.ssl_ratio,
-            self.ssl_mode,
-            self.ssl_temp,
-            self.ssl_reg
+            self.ssl_ratio, self.ssl_mode, self.ssl_temp, self.ssl_reg
         )
         self.pretrain_flag = config["pretrain_flag"]
         if self.pretrain_flag:
@@ -211,24 +246,27 @@ class SGL(AbstractRecommender):
         self.save_dir, self.tmp_model_dir = None, None
         if self.pretrain_flag or self.save_flag:
             self.tmp_model_dir = config.data_dir + '%s/model_tmp/%s/%s/' % (
-                self.dataset_name, 
-                self.model_name,
-                self.model_str)
+                self.dataset_name, self.model_name, self.model_str
+            )
             self.save_dir = config.data_dir + '%s/pretrain-embeddings/%s/n_layers=%d/' % (
-                self.dataset_name, 
-                self.model_name,
-                self.n_layers,)
+                self.dataset_name, self.model_name, self.n_layers
+            )
             ensureDir(self.tmp_model_dir)
             ensureDir(self.save_dir)
 
-        self.num_users, self.num_items, self.num_ratings = self.dataset.num_users, self.dataset.num_items, self.dataset.num_train_ratings
+        self.num_users = self.dataset.num_users
+        self.num_items = self.dataset.num_items
+        self.num_ratings = self.dataset.num_train_ratings
 
-        # === 指定 Group A: 買過 target item 的 users ===
+        # 指定 Group A（示例，可換成你實際標註）
         group_a_ids = [50, 98, 118, 191, 260, 550, 735, 947, 1175, 1615]
-        self.user_group_tensor = torch.zeros(self.num_users, dtype=torch.long)
-        self.user_group_tensor[group_a_ids] = 1  # 1: Group A, 0: 其他
 
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.user_group_tensor = torch.zeros(self.num_users, dtype=torch.long)
+        self.user_group_tensor[group_a_ids] = 1
+        self.user_group_tensor = self.user_group_tensor.to(self.device)  # 一次搬上裝置
+
+        # 初始圖
         adj_matrix = self.create_adj_mat()
         adj_matrix = sp_mat_to_sp_tensor(adj_matrix).to(self.device)
 
@@ -240,6 +278,26 @@ class SGL(AbstractRecommender):
             self.lightgcn.reset_parameters(init_method=self.param_init)
         self.optimizer = torch.optim.Adam(self.lightgcn.parameters(), lr=self.lr)
 
+        # 使用者活躍度（不可含測試期資訊）
+        self.user_activity = self._build_user_activity_from_train()
+
+        # user-aware 溫度（可做消融調 mode/超參數）
+        self.user_temp_scheduler = UserAwareTemp(
+            tau_base=self.ssl_temp, mode="enhance_low",
+            alpha=0.5, beta=0.3, gamma=0.7, min_tau=0.03, max_tau=1.0
+        )
+
+    def _build_user_activity_from_train(self):
+        """
+        由訓練互動資料現算每位使用者的活躍度（互動次數）。
+        回傳 torch.FloatTensor [num_users]，位於 self.device。
+        """
+        users_items = self.dataset.train_data.to_user_item_pairs()  # shape: [N, 2], [user, item]
+        users_np = users_items[:, 0]
+        counts = np.bincount(users_np, minlength=self.num_users).astype(np.float32)
+        # 需要的話可改成 np.log1p(counts) 做壓縮
+        return torch.from_numpy(counts).to(self.device)
+
     @timer
     def create_adj_mat(self, is_subgraph=False, aug_type='ed'):
         n_nodes = self.num_users + self.num_items
@@ -248,8 +306,11 @@ class SGL(AbstractRecommender):
 
         if is_subgraph and self.ssl_ratio > 0:
             if aug_type == 'nd':
-                drop_user_idx = randint_choice(self.num_users, size=self.num_users * self.ssl_ratio, replace=False)
-                drop_item_idx = randint_choice(self.num_items, size=self.num_items * self.ssl_ratio, replace=False)
+                # 轉整數，避免浮點長度問題
+                _n_u = int(self.num_users * self.ssl_ratio)
+                _n_i = int(self.num_items * self.ssl_ratio)
+                drop_user_idx = randint_choice(self.num_users, size=_n_u, replace=False)
+                drop_item_idx = randint_choice(self.num_items, size=_n_i, replace=False)
                 indicator_user = np.ones(self.num_users, dtype=np.float32)
                 indicator_item = np.ones(self.num_items, dtype=np.float32)
                 indicator_user[drop_user_idx] = 0.
@@ -257,260 +318,277 @@ class SGL(AbstractRecommender):
                 diag_indicator_user = sp.diags(indicator_user)
                 diag_indicator_item = sp.diags(indicator_item)
                 R = sp.csr_matrix(
-                    (np.ones_like(users_np, dtype=np.float32), (users_np, items_np)), 
-                    shape=(self.num_users, self.num_items))
+                    (np.ones_like(users_np, dtype=np.float32), (users_np, items_np)),
+                    shape=(self.num_users, self.num_items)
+                )
                 R_prime = diag_indicator_user.dot(R).dot(diag_indicator_item)
                 (user_np_keep, item_np_keep) = R_prime.nonzero()
                 ratings_keep = R_prime.data
-                tmp_adj = sp.csr_matrix((ratings_keep, (user_np_keep, item_np_keep+self.num_users)), shape=(n_nodes, n_nodes))
+                tmp_adj = sp.csr_matrix(
+                    (ratings_keep, (user_np_keep, item_np_keep + self.num_users)),
+                    shape=(n_nodes, n_nodes)
+                )
             if aug_type in ['ed', 'rw']:
-                keep_idx = randint_choice(len(users_np), size=int(len(users_np) * (1 - self.ssl_ratio)), replace=False)
+                keep_idx = randint_choice(len(users_np),
+                                          size=int(len(users_np) * (1 - self.ssl_ratio)),
+                                          replace=False)
                 user_np = np.array(users_np)[keep_idx]
                 item_np = np.array(items_np)[keep_idx]
                 ratings = np.ones_like(user_np, dtype=np.float32)
-                tmp_adj = sp.csr_matrix((ratings, (user_np, item_np+self.num_users)), shape=(n_nodes, n_nodes))
+                tmp_adj = sp.csr_matrix(
+                    (ratings, (user_np, item_np + self.num_users)),
+                    shape=(n_nodes, n_nodes)
+                )
         else:
             ratings = np.ones_like(users_np, dtype=np.float32)
-            tmp_adj = sp.csr_matrix((ratings, (users_np, items_np+self.num_users)), shape=(n_nodes, n_nodes))
+            tmp_adj = sp.csr_matrix(
+                (ratings, (users_np, items_np + self.num_users)),
+                shape=(n_nodes, n_nodes)
+            )
+
         adj_mat = tmp_adj + tmp_adj.T
 
-        # normalize adjcency matrix
+        # normalize adjacency matrix
         rowsum = np.array(adj_mat.sum(1))
         d_inv = np.power(rowsum, -0.5).flatten()
         d_inv[np.isinf(d_inv)] = 0.
         d_mat_inv = sp.diags(d_inv)
         norm_adj_tmp = d_mat_inv.dot(adj_mat)
         adj_matrix = norm_adj_tmp.dot(d_mat_inv)
-
         return adj_matrix
 
     def train_model(self):
-        data_iter = PairwiseSamplerV2(self.dataset.train_data, num_neg=1, batch_size=self.batch_size, shuffle=True)                    
-        self.logger.info(self.evaluator.metrics_info())
-        stopping_step = 0
+    
+        # ===== 主訓練：含 alpha 搜尋 =====
         for epoch in range(1, self.epochs + 1):
+            # ★ 每個 epoch 重新建立一次 data_iter，避免一次性 iterator 被耗盡
+            data_iter = PairwiseSamplerV2(self.dataset.train_data, num_neg=1,
+                                      batch_size=self.batch_size, shuffle=True)
+            # ★ 在 epoch 開頭就鎖定當前 alpha（這個 epoch 都用它）
+            current_alpha = self.alpha_values[self.current_alpha_idx]
             total_loss, total_bpr_loss, total_reg_loss = 0.0, 0.0, 0.0
             training_start_time = time()
+
+            # 兩視角子圖
             if self.ssl_aug_type in ['nd', 'ed']:
-                sub_graph1 = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
-                sub_graph1 = sp_mat_to_sp_tensor(sub_graph1).to(self.device)
-                sub_graph2 = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
-                sub_graph2 = sp_mat_to_sp_tensor(sub_graph2).to(self.device)
+                sub_graph1 = sp_mat_to_sp_tensor(self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)).to(self.device)
+                sub_graph2 = sp_mat_to_sp_tensor(self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)).to(self.device)
             else:
                 sub_graph1, sub_graph2 = [], []
                 for _ in range(0, self.n_layers):
-                    tmp_graph = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
-                    sub_graph1.append(sp_mat_to_sp_tensor(tmp_graph).to(self.device))
-                    tmp_graph = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
-                    sub_graph2.append(sp_mat_to_sp_tensor(tmp_graph).to(self.device))
+                    sub_graph1.append(sp_mat_to_sp_tensor(self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)).to(self.device))
+                    sub_graph2.append(sp_mat_to_sp_tensor(self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)).to(self.device))
+
             self.lightgcn.train()
+
+
             for bat_users, bat_pos_items, bat_neg_items in data_iter:
                 bat_users = torch.from_numpy(bat_users).long().to(self.device)
                 bat_pos_items = torch.from_numpy(bat_pos_items).long().to(self.device)
                 bat_neg_items = torch.from_numpy(bat_neg_items).long().to(self.device)
+
                 sup_logits, ssl_logits_user, ssl_logits_item = self.lightgcn(
-                    sub_graph1, sub_graph2, bat_users, bat_pos_items, bat_neg_items)
-                
-                # BPR Loss
+                    sub_graph1, sub_graph2, bat_users, bat_pos_items, bat_neg_items
+                )
+
+                # BPR
                 bpr_loss = -torch.sum(F.logsigmoid(sup_logits))
 
-                # Reg Loss
+                # L2
                 reg_loss = l2_loss(
                     self.lightgcn.user_embeddings(bat_users),
                     self.lightgcn.item_embeddings(bat_pos_items),
                     self.lightgcn.item_embeddings(bat_neg_items),
                 )
 
-                # InfoNCE Loss
-                clogits_user = torch.logsumexp(ssl_logits_user / self.ssl_temp, dim=1)
-                clogits_item = torch.logsumexp(ssl_logits_item / self.ssl_temp, dim=1)
-                infonce_loss = torch.sum(clogits_user + clogits_item)
+                # User-aware InfoNCE（user 端）
+                bat_user_activity = self.user_activity[bat_users]  # [B]
+                tau_i_users = self.user_temp_scheduler(bat_user_activity)  # [B]
+                user_infonce = user_aware_infonce_from_logits(ssl_logits_user, tau_i_users, reduction="sum")
+
+                # Item 端暫用固定溫度
+                item_logits = ssl_logits_item / self.ssl_temp
+                item_labels = torch.arange(item_logits.size(0), device=item_logits.device)
+                item_infonce = F.cross_entropy(item_logits, item_labels, reduction="sum")
+
+                infonce_loss = user_infonce + item_infonce
+
+                # 在 batch 迴圈內，算 group_loss 前面加上 no_grad（避免與主損失共用計算圖）
+                with torch.no_grad():
+                    _u_all_1, _ = self.lightgcn._forward_gcn(sub_graph1)
+                    _u_all_2, _ = self.lightgcn._forward_gcn(sub_graph2)
+                    _u_all_1 = F.normalize(_u_all_1, dim=1)
+                    _u_all_2 = F.normalize(_u_all_2, dim=1)
+
+                user_embs1 = F.embedding(bat_users, _u_all_1)
+                user_embs2 = F.embedding(bat_users, _u_all_2)
+                group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users,
+                                                    self.user_group_tensor, margin=0.5)
+
                 
-                # === Group Contrastive Loss ===
-                user_embs1 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph1)[0], dim=1))
-                user_embs2 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph2)[0], dim=1))
-                user_group_tensor = self.user_group_tensor.to(bat_users.device)
-                group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users, user_group_tensor, margin=0.5)
-                
-                # 動態調整 alpha 值
+                # loss 組合
                 current_alpha = self.alpha_values[self.current_alpha_idx]
                 loss = bpr_loss + self.ssl_reg * infonce_loss + self.reg * reg_loss + current_alpha * group_loss
-                # === Group Contrastive Loss ===
-                
-                total_loss += loss
-                total_bpr_loss += bpr_loss
-                total_reg_loss += self.reg * reg_loss
+
+                total_loss += loss.item()
+                total_bpr_loss += bpr_loss.item()
+                total_reg_loss += (self.reg * reg_loss).item()
+
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
-            current_alpha = self.alpha_values[self.current_alpha_idx]
-            current_loss = total_loss.item() / self.num_ratings
+            # 紀錄訓練日誌（不做任何評估）
+            current_loss = total_loss / self.num_ratings
             self.alpha_losses.append(current_loss)
-            
-            self.logger.info("[iter %d : loss : %.4f = %.4f + %.4f + %.4f, alpha: %.2f, time: %f]" % (
-                epoch, 
+            self.logger.info("[iter %d : loss : %.4f = %.4f + %.4f + %.4f, alpha: %.2f, time: %.2fs]" % (
+                epoch,
                 current_loss,
                 total_bpr_loss / self.num_ratings,
                 (total_loss - total_bpr_loss - total_reg_loss) / self.num_ratings,
                 total_reg_loss / self.num_ratings,
                 current_alpha,
-                time()-training_start_time,))
+                time() - training_start_time,
+            ))
 
-            # 檢查是否需要切換到下一個 alpha 值
+            # alpha 搜尋
             if epoch % self.alpha_search_epochs == 0 and epoch > 0:
-                # 計算當前 alpha 的平均 loss
-                avg_loss = np.mean(self.alpha_losses)
+                avg_loss = float(np.mean(self.alpha_losses))
                 self.alpha_results[current_alpha] = avg_loss
-                self.logger.info("Alpha %.2f average loss: %.4f" % (current_alpha, avg_loss))
-                
-                # 檢查是否為最佳 loss
                 if avg_loss < self.best_loss:
                     self.best_loss = avg_loss
                     self.best_alpha = current_alpha
-                    self.logger.info("New best alpha: %.2f with loss: %.4f" % (current_alpha, avg_loss))
-                
-                # 切換到下一個 alpha
                 self.current_alpha_idx += 1
                 if self.current_alpha_idx < len(self.alpha_values):
-                    self.logger.info("Switching to alpha=%.2f" % self.alpha_values[self.current_alpha_idx])
-                    self.alpha_losses = []  # 重置 loss 記錄
+                    self.alpha_losses = []
                 else:
-                    self.logger.info("=== Alpha Search Complete ===")
-                    self.logger.info("Best alpha: %.2f with average loss: %.4f" % (self.best_alpha, self.best_loss))
-                    for alpha in sorted(self.alpha_results.keys()):
-                        loss = self.alpha_results[alpha]
-                        marker = " <- BEST" if alpha == self.best_alpha else ""
-                        self.logger.info("Alpha %.2f: %.4f%s" % (alpha, loss, marker))
+                    # alpha 搜尋完畢
+                    self.logger.info("Alpha search done. Best alpha: %.2f (avg loss=%.4f)" %
+                                     (self.best_alpha, self.best_loss))
                     break
-        ### 使用最佳 alpha 重新訓練並匯出「傳播後」的向量
+
+        # ===== 以最佳 alpha 做 final retrain（仍不做評估）=====
         self.logger.info("=== Training with Best Alpha ===")
-        self.logger.info("Using best alpha: %.2f (loss: %.4f)" % (self.best_alpha, self.best_loss))
-        
-        # 重新設定為最佳 alpha
+        self.logger.info("Using best alpha: %.2f (avg loss: %.4f)" % (self.best_alpha, self.best_loss))
         self.current_alpha_idx = self.alpha_values.index(self.best_alpha)
-        
-        # 用最佳 alpha 再訓練幾個 epoch
+
+        # 重新建立一次 data_iter（避免一次性 iterator 用盡）
+        data_iter = PairwiseSamplerV2(self.dataset.train_data, num_neg=1,
+                                      batch_size=self.batch_size, shuffle=True)
+
         final_epochs = 10
         for epoch in range(final_epochs):
             total_loss = 0.0
             training_start_time = time()
+            sum_tau, cnt_tau = 0.0, 0
+
+            # 兩視角子圖
             if self.ssl_aug_type in ['nd', 'ed']:
-                sub_graph1 = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
-                sub_graph1 = sp_mat_to_sp_tensor(sub_graph1).to(self.device)
-                sub_graph2 = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
-                sub_graph2 = sp_mat_to_sp_tensor(sub_graph2).to(self.device)
+                sub_graph1 = sp_mat_to_sp_tensor(self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)).to(self.device)
+                sub_graph2 = sp_mat_to_sp_tensor(self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)).to(self.device)
             else:
                 sub_graph1, sub_graph2 = [], []
                 for _ in range(0, self.n_layers):
-                    tmp_graph = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
-                    sub_graph1.append(sp_mat_to_sp_tensor(tmp_graph).to(self.device))
-                    tmp_graph = self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)
-                    sub_graph2.append(sp_mat_to_sp_tensor(tmp_graph).to(self.device))
-            
+                    sub_graph1.append(sp_mat_to_sp_tensor(self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)).to(self.device))
+                    sub_graph2.append(sp_mat_to_sp_tensor(self.create_adj_mat(is_subgraph=True, aug_type=self.ssl_aug_type)).to(self.device))
+
             self.lightgcn.train()
+
+
             for bat_users, bat_pos_items, bat_neg_items in data_iter:
                 bat_users = torch.from_numpy(bat_users).long().to(self.device)
                 bat_pos_items = torch.from_numpy(bat_pos_items).long().to(self.device)
                 bat_neg_items = torch.from_numpy(bat_neg_items).long().to(self.device)
+
                 sup_logits, ssl_logits_user, ssl_logits_item = self.lightgcn(
-                    sub_graph1, sub_graph2, bat_users, bat_pos_items, bat_neg_items)
-                
+                    sub_graph1, sub_graph2, bat_users, bat_pos_items, bat_neg_items
+                )
+
                 bpr_loss = -torch.sum(F.logsigmoid(sup_logits))
                 reg_loss = l2_loss(
                     self.lightgcn.user_embeddings(bat_users),
                     self.lightgcn.item_embeddings(bat_pos_items),
                     self.lightgcn.item_embeddings(bat_neg_items),
                 )
-                clogits_user = torch.logsumexp(ssl_logits_user / self.ssl_temp, dim=1)
-                clogits_item = torch.logsumexp(ssl_logits_item / self.ssl_temp, dim=1)
-                infonce_loss = torch.sum(clogits_user + clogits_item)
-                
-                user_embs1 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph1)[0], dim=1))
-                user_embs2 = F.embedding(bat_users, F.normalize(self.lightgcn._forward_gcn(sub_graph2)[0], dim=1))
-                user_group_tensor = self.user_group_tensor.to(bat_users.device)
-                group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users, user_group_tensor, margin=0.5)
-                
+
+                # User-aware InfoNCE（user 端）
+                bat_user_activity = self.user_activity[bat_users]
+                tau_i_users = self.user_temp_scheduler(bat_user_activity)
+
+                # 統計整個 epoch 的 tau 平均
+                with torch.no_grad():
+                    sum_tau += tau_i_users.mean().item() * tau_i_users.size(0)
+                    cnt_tau += tau_i_users.size(0)
+
+                user_infonce = user_aware_infonce_from_logits(ssl_logits_user, tau_i_users, reduction="sum")
+
+                # Item 端固定溫度
+                item_logits = ssl_logits_item / self.ssl_temp
+                item_labels = torch.arange(item_logits.size(0), device=item_logits.device)
+                item_infonce = F.cross_entropy(item_logits, item_labels, reduction="sum")
+
+                infonce_loss = user_infonce + item_infonce
+
+                # 在 batch 迴圈內，算 group_loss 前面加上 no_grad（避免與主損失共用計算圖）
+                with torch.no_grad():
+                    _u_all_1, _ = self.lightgcn._forward_gcn(sub_graph1)
+                    _u_all_2, _ = self.lightgcn._forward_gcn(sub_graph2)
+                    _u_all_1 = F.normalize(_u_all_1, dim=1)
+                    _u_all_2 = F.normalize(_u_all_2, dim=1)
+
+                user_embs1 = F.embedding(bat_users, _u_all_1)
+                user_embs2 = F.embedding(bat_users, _u_all_2)
+                group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users,
+                                                    self.user_group_tensor, margin=0.5)
+
+
+
                 loss = bpr_loss + self.ssl_reg * infonce_loss + self.reg * reg_loss + self.best_alpha * group_loss
-                total_loss += loss
+
+                total_loss += loss.item()
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-            
-            self.logger.info("[Final training %d/%d : loss : %.4f, alpha: %.2f, time: %f]" % (
-                epoch + 1, final_epochs, total_loss.item() / self.num_ratings, self.best_alpha, time()-training_start_time))
-        
-        self.logger.info("best_result@epoch %d:\n" % self.best_epoch)
-        if self.save_flag:
-            import os
-            best_model_path = self.tmp_model_dir + 'best_model.pth'
-            if os.path.exists(best_model_path):
-                self.logger.info('Loading from the saved best model during the training process.')
-                self.lightgcn.load_state_dict(torch.load(best_model_path))
-                uebd = self.lightgcn.user_embeddings.weight.cpu().detach().numpy()
-                iebd = self.lightgcn.item_embeddings.weight.cpu().detach().numpy()
-                np.save(self.save_dir + 'user_embeddings.npy', uebd)
-                np.save(self.save_dir + 'item_embeddings.npy', iebd)
-                buf, _ = self.evaluate_model()
-            else:
-                self.logger.warning(f"No best_model.pth found at {best_model_path}, skip loading best model. Export embedding from current model.")
-                uebd = self.lightgcn.user_embeddings.weight.cpu().detach().numpy()
-                iebd = self.lightgcn.item_embeddings.weight.cpu().detach().numpy()
-                np.save(self.save_dir + 'user_embeddings.npy', uebd)
-                np.save(self.save_dir + 'item_embeddings.npy', iebd)
-                buf = 'No best model, export from current model.'
-        elif self.pretrain_flag:
-            buf, _ = self.evaluate_model()
-        else:
-            buf = '\t'.join([("%.4f" % x).ljust(12) for x in self.best_result])
-        self.logger.info("\t\t%s" % buf)
-    
-        # ★ 在這裡統一匯出「傳播後」的最終向量
+
+            self.logger.info("[Final training %d/%d : loss : %.4f, alpha: %.2f, time: %.2fs]" % (
+                epoch + 1, final_epochs, total_loss / self.num_ratings, self.best_alpha, time() - training_start_time
+            ))
+            mean_tau = sum_tau / max(cnt_tau, 1)
+            self.logger.info(f"user-aware tau mean (epoch {epoch+1}): {mean_tau:.4f}")
+
+        # ===== 僅輸出「傳播後」最終向量，不做評估 =====
         try:
             out_dir = self.export_final_embeddings(out_dir=self.save_dir)
             self.logger.info(f"export_final_embeddings done: {out_dir}")
         except Exception as e:
             self.logger.warning(f"export_final_embeddings failed: {e}")
 
-
-    # @timer
-    def evaluate_model(self):
-        if not self.dataset.test_data or len(self.dataset.test_data) == 0:
-            return "No test data", False
-        flag = False
-        self.lightgcn.eval()
-        current_result, buf = self.evaluator.evaluate(self)
-        if self.best_result[1] < current_result[1]:
-            self.best_result = current_result
-            flag = True
-        return buf, flag
+    # 不需要 evaluate_model（整個移除）
 
     def predict(self, users):
+        # 可留可刪；若僅要 pretrain embeddings 給 BiGNAS，可不使用
         users = torch.from_numpy(np.asarray(users)).long().to(self.device)
         return self.lightgcn.predict(users).cpu().detach().numpy()
-    
-    # 放在 SGL 類別內（與 evaluate_model 同層級）
+
     def export_final_embeddings(self, out_dir=None):
-        # 1) 前向圖傳播拿最終向量
+        """
+        匯出 GCN 傳播後的 user/item 最終向量：
+        - user_embeddings_final.npy
+        - item_embeddings_final.npy
+        """
         self.lightgcn.eval()
         with torch.no_grad():
             user_final, item_final = self.lightgcn._forward_gcn(self.lightgcn.norm_adj)
-
-        # 2) 轉 numpy
         user_final = user_final.detach().cpu().numpy()
         item_final = item_final.detach().cpu().numpy()
 
-        # 3) 決定輸出路徑
         if out_dir is None:
             if self.save_dir is not None:
                 out_dir = self.save_dir
             else:
-                # 若沒開 save_flag/pretrain_flag，自己建一個穩定的資料夾
                 out_dir = self.config.data_dir + f"{self.dataset_name}/pretrain-embeddings/{self.model_name}/final/"
                 ensureDir(out_dir)
 
-        # 4) 存檔
         np.save(out_dir + 'user_embeddings_final.npy', user_final)
         np.save(out_dir + 'item_embeddings_final.npy', item_final)
         return out_dir
-
