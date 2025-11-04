@@ -97,7 +97,10 @@ def search(args):
     save_edge_index("target_test_edge_index",  data.target_test_edge_index)
 
 
-    # === HardUser 加邊策略 ===
+
+    ###########################################################################
+    # ========================== 挑 Hard User 加邊 ==============================
+    ###########################################################################
     if args.use_hard_user_augment:
         logging.info("[HardUser] 開始執行方法A（Hard Users + 加邊策略）...")
 
@@ -161,6 +164,44 @@ def search(args):
             split_result["target_train_edge_index"] = torch.cat(
                 [split_result["target_train_edge_index"], summary["E_add_target"]], dim=1
             )
+    ###################################################################################################################
+
+#  ##########################################################################
+#  ========================== 挑 Hard Item 加邊 ==============================
+#  ##########################################################################
+#     sgl_edge_dir = "logs/hard_user"  # SGL 產出的假邊資料夾
+
+#     def load_sgl_edges(name):
+#         path = os.path.join(sgl_edge_dir, name)
+#         if not os.path.exists(path):
+#             logging.warning(f"[SGL] {name} 不存在，跳過。")
+#             return None
+#         edges_np = np.load(path)
+#         if edges_np.size == 0:
+#             logging.warning(f"[SGL] {name} 為空，跳過。")
+#             return None
+#         edges_t = torch.tensor(edges_np, dtype=torch.long)
+#         u, v = edges_t
+#         logging.info(f"[SGL] 載入 {name}: {edges_t.shape}, u:[{u.min().item()}-{u.max().item()}], v:[{v.min().item()}-{v.max().item()}]")
+#         return edges_t
+
+#     E_add_source_sgl = load_sgl_edges("E_add_source_SGL.npy")
+#     E_add_target_sgl = load_sgl_edges("E_add_target_SGL.npy")
+
+#     if E_add_source_sgl is not None:
+#         split_result["source_train_edge_index"] = torch.cat(
+#             [split_result["source_train_edge_index"], E_add_source_sgl], dim=1
+#         )
+#         logging.info(f"[SGL] ✅ 已合併 E_add_source_SGL.npy → source_train_edge_index "
+#                         f"({split_result['source_train_edge_index'].shape})")
+
+#     if E_add_target_sgl is not None:
+#         split_result["target_train_edge_index"] = torch.cat(
+#             [split_result["target_train_edge_index"], E_add_target_sgl], dim=1
+#         )
+#         logging.info(f"[SGL] ✅ 已合併 E_add_target_SGL.npy → target_train_edge_index "
+#                         f"({split_result['target_train_edge_index'].shape})")
+#   ##################################################################################################################
 
     # === 建立 BiGNAS 模型並訓練 ===
     model = Model(args)
@@ -248,10 +289,10 @@ if __name__ == "__main__":
                         help="Source domain 要加邊的比例 (0~1)")
     parser.add_argument("--edge-ratio-target", type=float, default=1.0,
                         help="Target domain 要加邊的比例 (0~1)")
-
+    
     # 讀 target domain 的 SGL user embedding（只需 user）
     parser.add_argument("--sgl-dir-target", type=str,
-        default="/mnt/sda1/sherry/SGL-BiGNAS/SGL-Torch/dataset/amazon/pretrain-embeddings/SGL/n_layers=3",
+        default="/mnt/sda1/sherry/BiGNAS/SGL-BiGNAS/BiGNAS-Attack/logs/sgl_emb/",
         help="target domain 的 SGL 輸出資料夾，內含 user_embeddings_final.npy")
 
     args = parser.parse_args()

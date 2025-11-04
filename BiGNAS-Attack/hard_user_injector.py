@@ -46,6 +46,7 @@ class HardUserInjector:
         mask = (target_train_edge_index[1] == cold_item_id)
         ua = target_train_edge_index[0][mask].unique()
         groupA = set(ua.tolist())
+        print(f"GroupA users who bought cold_item_id={groupA}")
         all_users = set(range(num_users))
         groupB = list(all_users - groupA)
         return list(groupA), groupB
@@ -148,7 +149,9 @@ class HardUserInjector:
             E_target = torch.stack([rows, cols], dim=0)
 
             if edge_ratio_target < 1.0:
-                keep = max(1, int(E_target.size(1) * edge_ratio_target))
+                # keep = max(1, int(E_target.size(1) * edge_ratio_target))
+                #!
+                keep = 38
                 perm = torch.randperm(E_target.size(1))[:keep]
                 E_target = E_target[:, perm]
 
@@ -180,7 +183,9 @@ class HardUserInjector:
 
                 if len(cand_pairs) > 0:
                     # ✅ 保留 edge_ratio_source 比例（取前 keep 條，不隨機）
-                    keep = max(1, int(len(cand_pairs) * edge_ratio_source))
+                    #!
+                    keep = 540
+                    # keep = max(1, int(len(cand_pairs) * edge_ratio_source))
                     picked = cand_pairs[:keep]   # 直接取前 keep
                     E_add_source = torch.tensor(picked, dtype=torch.long).t()
 
