@@ -1,0 +1,76 @@
+2025-11-03 17:34:27.254: my pid: 1261603
+2025-11-03 17:34:27.255: model: model.general_recommender.SGL
+2025-11-03 17:34:27.255: Dataset: all_data, users=2809, items=31062, ratings=110570
+2025-11-03 17:34:27.255: NeuRec:[NeuRec]:
+recommender=SGL
+dataset=all_data
+source_domain=amazon-cd
+target_domain=amazon-kitchen
+file_column=UI
+sep=','
+gpu_id=0
+gpu_mem=0.99
+metric=["Precision", "Recall", "NDCG"]
+top_k=[20]
+test_thread=8
+test_batch_size=128
+seed=2021
+start_testing_epoch=0
+
+SGL:[hyperparameters]:
+aug_type=ED
+reg=1e-4
+embed_size=64
+n_layers=3
+ssl_reg=0.5
+ssl_ratio=0.1
+ssl_temp=0.2
+ssl_mode=both_side
+lr=0.001
+learner=adam
+adj_type=pre
+epochs=1000
+batch_size=2048
+num_negatives=1
+param_init=xavier_uniform
+stddev=0.01
+verbose=1
+stop_cnt=10
+pretrain_flag=0
+save_flag=0
+
+Command line:
+recommender=SGL
+dataset=all_data
+aug_type=ED
+reg=1e-4
+n_layers=3
+ssl_reg=0.5
+ssl_ratio=0.1
+ssl_temp=0.2
+2025-11-03 17:34:28.115: metrics:	Precision@20	Recall@20   	NDCG@20     
+2025-11-03 17:35:36.433: [iter 1 : loss : 5.0443 = 0.6920 + 4.3523 + 0.0000, time: 68.317539]
+2025-11-03 17:35:36.433: epoch 1:	No test data
+2025-11-03 17:36:44.341: [iter 2 : loss : 5.0023 = 0.6914 + 4.3109 + 0.0000, time: 67.686530]
+2025-11-03 17:36:44.341: epoch 2:	No test data
+2025-11-03 17:37:51.963: [iter 3 : loss : 4.9825 = 0.6908 + 4.2916 + 0.0000, time: 67.396753]
+2025-11-03 17:37:51.963: epoch 3:	No test data
+2025-11-03 17:38:59.383: [iter 4 : loss : 4.9754 = 0.6904 + 4.2850 + 0.0000, time: 67.201076]
+2025-11-03 17:38:59.383: epoch 4:	No test data
+2025-11-03 17:40:06.868: [iter 5 : loss : 4.9709 = 0.6900 + 4.2809 + 0.0000, time: 67.266914]
+2025-11-03 17:40:06.868: epoch 5:	No test data
+2025-11-03 17:41:14.267: [iter 6 : loss : 4.9676 = 0.6896 + 4.2780 + 0.0000, time: 67.184391]
+2025-11-03 17:41:14.267: epoch 6:	No test data
+2025-11-03 17:42:21.684: [iter 7 : loss : 4.9643 = 0.6891 + 4.2752 + 0.0000, time: 67.207557]
+2025-11-03 17:42:21.684: epoch 7:	No test data
+2025-11-03 17:43:29.218: [iter 8 : loss : 4.9621 = 0.6886 + 4.2735 + 0.0000, time: 67.322765]
+2025-11-03 17:43:29.219: epoch 8:	No test data
+2025-11-03 17:44:36.744: [iter 9 : loss : 4.9621 = 0.6880 + 4.2741 + 0.0000, time: 67.313965]
+2025-11-03 17:44:36.744: epoch 9:	No test data
+2025-11-03 17:45:44.228: [iter 10 : loss : 4.9598 = 0.6873 + 4.2725 + 0.0000, time: 67.270849]
+2025-11-03 17:45:44.228: epoch 10:	No test data
+2025-11-03 17:45:44.228: Early stopping is trigger at epoch: 10
+2025-11-03 17:45:44.228: best_result@epoch 0:
+
+2025-11-03 17:45:44.228: 		0.0000      	0.0000      
+2025-11-03 17:45:44.261: export_final_embeddings done: /mnt/sda1/sherry/BiGNAS/SGL-BiGNAS/SGL-Torch/dataset/all_data/pretrain-embeddings/SGL/final/

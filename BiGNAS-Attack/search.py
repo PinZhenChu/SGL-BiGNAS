@@ -98,110 +98,110 @@ def search(args):
 
 
 
-    ###########################################################################
-    # ========================== 挑 Hard User 加邊 ==============================
-    ###########################################################################
-    if args.use_hard_user_augment:
-        logging.info("[HardUser] 開始執行方法A（Hard Users + 加邊策略）...")
+    # ###########################################################################
+    # # ========================== 挑 Hard User 加邊 ==============================
+    # ###########################################################################
+    # if args.use_hard_user_augment:
+    #     logging.info("[HardUser] 開始執行方法A（Hard Users + 加邊策略）...")
 
-        injector = HardUserInjector(
-            top_ratio=args.hard_top_ratio,
-            log_dir="logs/hard_user",
-        )
+    #     injector = HardUserInjector(
+    #         top_ratio=args.hard_top_ratio,
+    #         log_dir="logs/hard_user",
+    #     )
 
-        # 讀 SGL 輸出的 target user embedding
-        # user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_final.npy")
-        user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_final.npy")
-        if not os.path.exists(user_emb_target_path):
-            raise FileNotFoundError(f"[HardUser] 找不到 SGL user embedding：{user_emb_target_path}")
+    #     # 讀 SGL 輸出的 target user embedding
+    #     # user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_final.npy")
+    #     user_emb_target_path = os.path.join(args.sgl_dir_target, "user_embeddings_final.npy")
+    #     if not os.path.exists(user_emb_target_path):
+    #         raise FileNotFoundError(f"[HardUser] 找不到 SGL user embedding：{user_emb_target_path}")
 
-        user_emb_target = torch.tensor(np.load(user_emb_target_path), dtype=torch.float)
+    #     user_emb_target = torch.tensor(np.load(user_emb_target_path), dtype=torch.float)
 
-        # 執行加邊，得到 ΔE
-        summary = injector.run(
-            split_result=split_result,
-            user_emb_target=user_emb_target,
-            num_users=args.num_users,
-            num_source_items=args.num_source_items,
-            num_target_items=args.num_target_items,
-            cold_item_id=args.cold_item_id,
-            edge_ratio_source=args.edge_ratio_source,   # 新增：控制 source domain 假邊比例
-            edge_ratio_target=args.edge_ratio_target,   # 新增：控制 target domain 假邊比例
-        )
+    #     # 執行加邊，得到 ΔE
+    #     summary = injector.run(
+    #         split_result=split_result,
+    #         user_emb_target=user_emb_target,
+    #         num_users=args.num_users,
+    #         num_source_items=args.num_source_items,
+    #         num_target_items=args.num_target_items,
+    #         cold_item_id=args.cold_item_id,
+    #         edge_ratio_source=args.edge_ratio_source,   # 新增：控制 source domain 假邊比例
+    #         edge_ratio_target=args.edge_ratio_target,   # 新增：控制 target domain 假邊比例
+    #     )
 
-        logging.info(
-            f"[HardUser] hard_users={len(summary['hard_users'])}, "
-            f"cold_item_id={summary['cold_item_id']}, "
-            f"E_add_source={summary['E_add_source'].shape[1]}, "
-            f"E_add_target={summary['E_add_target'].shape[1]}"
-        )
-        # 假設 split_result 已經從 link_split(data) 得到
-        cold_item_id = args.cold_item_id
-        debug_cold_item_counts(split_result, cold_item_id)
+    #     logging.info(
+    #         f"[HardUser] hard_users={len(summary['hard_users'])}, "
+    #         f"cold_item_id={summary['cold_item_id']}, "
+    #         f"E_add_source={summary['E_add_source'].shape[1]}, "
+    #         f"E_add_target={summary['E_add_target'].shape[1]}"
+    #     )
+    #     # 假設 split_result 已經從 link_split(data) 得到
+    #     cold_item_id = args.cold_item_id
+    #     debug_cold_item_counts(split_result, cold_item_id)
 
-        def check_edge_index(edge_index, num_users, num_source_items, name):
-            if edge_index is None or edge_index.numel() == 0:
-                logging.info(f"[{name}] empty (skip check)")
-                return
+    #     def check_edge_index(edge_index, num_users, num_source_items, name):
+    #         if edge_index is None or edge_index.numel() == 0:
+    #             logging.info(f"[{name}] empty (skip check)")
+    #             return
 
-            u, v = edge_index
-            min_u, max_u = u.min().item(), u.max().item()
-            min_v, max_v = v.min().item(), v.max().item()
-            logging.info(
-                f"[{name}] users {min_u}~{max_u} (limit {num_users-1}), "
-                f"items {min_v}~{max_v}, valid user∈[0,{num_users-1}], item∈[0,{num_source_items-1}]"
-            )
+    #         u, v = edge_index
+    #         min_u, max_u = u.min().item(), u.max().item()
+    #         min_v, max_v = v.min().item(), v.max().item()
+    #         logging.info(
+    #             f"[{name}] users {min_u}~{max_u} (limit {num_users-1}), "
+    #             f"items {min_v}~{max_v}, valid user∈[0,{num_users-1}], item∈[0,{num_source_items-1}]"
+    #         )
 
-        check_edge_index(summary["E_add_source"], args.num_users, args.num_source_items, "E_add_source")
-        check_edge_index(summary["E_add_target"], args.num_users, args.num_target_items, "E_add_target")
+    #     check_edge_index(summary["E_add_source"], args.num_users, args.num_source_items, "E_add_source")
+    #     check_edge_index(summary["E_add_target"], args.num_users, args.num_target_items, "E_add_target")
 
-        # merge ΔE 回 split_result
-        if summary["E_add_source"].numel() > 0:
-            split_result["source_train_edge_index"] = torch.cat(
-                [split_result["source_train_edge_index"], summary["E_add_source"]], dim=1
-            )
-        if summary["E_add_target"].numel() > 0:
-            split_result["target_train_edge_index"] = torch.cat(
-                [split_result["target_train_edge_index"], summary["E_add_target"]], dim=1
-            )
-    ###################################################################################################################
+    #     # merge ΔE 回 split_result
+    #     if summary["E_add_source"].numel() > 0:
+    #         split_result["source_train_edge_index"] = torch.cat(
+    #             [split_result["source_train_edge_index"], summary["E_add_source"]], dim=1
+    #         )
+    #     if summary["E_add_target"].numel() > 0:
+    #         split_result["target_train_edge_index"] = torch.cat(
+    #             [split_result["target_train_edge_index"], summary["E_add_target"]], dim=1
+    #         )
+    # ###################################################################################################################
 
-#  ##########################################################################
+ ##########################################################################
 #  ========================== 挑 Hard Item 加邊 ==============================
-#  ##########################################################################
-#     sgl_edge_dir = "logs/hard_user"  # SGL 產出的假邊資料夾
+ ##########################################################################
+    # sgl_edge_dir = "logs/hard_user"  # SGL 產出的假邊資料夾
 
-#     def load_sgl_edges(name):
-#         path = os.path.join(sgl_edge_dir, name)
-#         if not os.path.exists(path):
-#             logging.warning(f"[SGL] {name} 不存在，跳過。")
-#             return None
-#         edges_np = np.load(path)
-#         if edges_np.size == 0:
-#             logging.warning(f"[SGL] {name} 為空，跳過。")
-#             return None
-#         edges_t = torch.tensor(edges_np, dtype=torch.long)
-#         u, v = edges_t
-#         logging.info(f"[SGL] 載入 {name}: {edges_t.shape}, u:[{u.min().item()}-{u.max().item()}], v:[{v.min().item()}-{v.max().item()}]")
-#         return edges_t
+    # def load_sgl_edges(name):
+    #     path = os.path.join(sgl_edge_dir, name)
+    #     if not os.path.exists(path):
+    #         logging.warning(f"[SGL] {name} 不存在，跳過。")
+    #         return None
+    #     edges_np = np.load(path)
+    #     if edges_np.size == 0:
+    #         logging.warning(f"[SGL] {name} 為空，跳過。")
+    #         return None
+    #     edges_t = torch.tensor(edges_np, dtype=torch.long)
+    #     u, v = edges_t
+    #     logging.info(f"[SGL] 載入 {name}: {edges_t.shape}, u:[{u.min().item()}-{u.max().item()}], v:[{v.min().item()}-{v.max().item()}]")
+    #     return edges_t
 
-#     E_add_source_sgl = load_sgl_edges("E_add_source_SGL.npy")
-#     E_add_target_sgl = load_sgl_edges("E_add_target_SGL.npy")
+    # E_add_source_sgl = load_sgl_edges("E_add_source_SGL.npy")
+    # E_add_target_sgl = load_sgl_edges("E_add_target_SGL.npy")
 
-#     if E_add_source_sgl is not None:
-#         split_result["source_train_edge_index"] = torch.cat(
-#             [split_result["source_train_edge_index"], E_add_source_sgl], dim=1
-#         )
-#         logging.info(f"[SGL] ✅ 已合併 E_add_source_SGL.npy → source_train_edge_index "
-#                         f"({split_result['source_train_edge_index'].shape})")
+    # if E_add_source_sgl is not None:
+    #     split_result["source_train_edge_index"] = torch.cat(
+    #         [split_result["source_train_edge_index"], E_add_source_sgl], dim=1
+    #     )
+    #     logging.info(f"[SGL] ✅ 已合併 E_add_source_SGL.npy → source_train_edge_index "
+    #                     f"({split_result['source_train_edge_index'].shape})")
 
-#     if E_add_target_sgl is not None:
-#         split_result["target_train_edge_index"] = torch.cat(
-#             [split_result["target_train_edge_index"], E_add_target_sgl], dim=1
-#         )
-#         logging.info(f"[SGL] ✅ 已合併 E_add_target_SGL.npy → target_train_edge_index "
-#                         f"({split_result['target_train_edge_index'].shape})")
-#   ##################################################################################################################
+    # if E_add_target_sgl is not None:
+    #     split_result["target_train_edge_index"] = torch.cat(
+    #         [split_result["target_train_edge_index"], E_add_target_sgl], dim=1
+    #     )
+    #     logging.info(f"[SGL] ✅ 已合併 E_add_target_SGL.npy → target_train_edge_index "
+    #                     f"({split_result['target_train_edge_index'].shape})")
+  ##################################################################################################################
 
     # === 建立 BiGNAS 模型並訓練 ===
     model = Model(args)

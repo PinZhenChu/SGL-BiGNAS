@@ -1,3 +1,4 @@
+#master
 from reckit import Configurator
 from importlib.util import find_spec
 from importlib import import_module
@@ -7,6 +8,18 @@ import sys
 import numpy as np
 import random
 import torch
+
+# import pandas as pd
+
+# files = [
+#     "dataset/amazon-cd/amazon-cd.train",
+#     "dataset/amazon-cd/amazon-cd.valid",
+#     "dataset/amazon-cd/amazon-cd.test",
+#     "dataset/amazon-kitchen/amazon-kitchen.train"
+# ]
+# dfs = [pd.read_csv(f, sep='\t', header=None) for f in files]
+# all_df = pd.concat(dfs, ignore_index=True)
+# all_df.to_csv("dataset/all_data.train", sep='\t', header=False, index=False)
 
 def _set_random_seed(seed=2020):
     

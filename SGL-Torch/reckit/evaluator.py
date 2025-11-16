@@ -98,7 +98,9 @@ class Evaluator(object):
     @typeassert(user_test_dict=dict)
     def set_test_data(self, user_test_dict):
         if len(user_test_dict) == 0:
-            raise ValueError("'user_test_dict' can be empty.")
+            # raise ValueError("'user_test_dict' can be empty.")
+            import warnings
+            warnings.warn("'user_test_dict' is empty. No test evaluation will be performed.")
         self.user_pos_test = user_test_dict
 
     def metrics_info(self):
