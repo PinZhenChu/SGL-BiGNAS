@@ -246,7 +246,6 @@ class CrossDomain(Dataset):
         return data
 
 
-
 class Dataset(BaseDataset):
     def __init__(self, link, label):
         self.link = link

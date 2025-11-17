@@ -29,72 +29,119 @@ from reckit import randint_choice
 import os
 
 
-### User-Aware Temperature Scaling for InfoNCE Loss
-class UserAwareTemp:
+def group_aware_infonce_full(logits: torch.Tensor,
+                             anchor_user_ids: torch.Tensor,
+                             user_group_tensor: torch.Tensor,
+                             base_tau_vec: torch.Tensor,
+                             kappa: float = 2.0,
+                             reduction: str = "sum") -> torch.Tensor:
     """
-    逐樣本溫度排程器：
-    mode="enhance_low": 強化低活躍（低互動者 tau 變小，對比更強）
-    mode="suppress_low": 抑制低活躍（低互動者 tau 變大，對比更弱）
-    mode="fixed": 固定溫度
+    參數：
+      logits: [B, num_users]
+      anchor_user_ids: [B]，該 batch 的全域 user id（bat_users）
+      user_group_tensor: [num_users]，0: Group B, 1: Group A
+      base_tau_vec: [B]，每個 anchor 的基礎溫度（可全為 self.ssl_temp）
+      kappa: 放大倍數（>1）
     """
-    def __init__(self, tau_base=0.2, mode="enhance_low",
-                 alpha=0.5, beta=0.3, gamma=0.7,
-                 min_tau=0.03, max_tau=1.0):
-        self.tau_base = tau_base
-        self.mode = mode
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
-        self.min_tau = min_tau
-        self.max_tau = max_tau
+    device = logits.device
+    B, N = logits.size()
 
-    def __call__(self, user_activity_vec: torch.Tensor) -> torch.Tensor:
-        ua = torch.clamp(user_activity_vec, min=0.0)
-        if self.mode == "suppress_low":
-            tau_i = self.tau_base * (1.0 + self.alpha * torch.exp(-self.beta * ua))
-        elif self.mode == "enhance_low":
-            tau_i = self.tau_base / (1.0 + self.gamma * torch.log1p(ua))
-        else:
-            tau_i = torch.full_like(ua, self.tau_base)
-        return torch.clamp(tau_i, min=self.min_tau, max=self.max_tau)
+    # 基礎溫度展成 [B, N]，原本每個 anchor i 有一個 base_tau_vec[i]，現在展開成整個矩陣 tau[i, j]，初始時每一格都是同一個 τ（例如 0.2）。
+    tau = base_tau_vec.unsqueeze(1).expand(B, N)  # [B, N]
 
+    # 列（anchor）的群組、欄（所有 user）的群組
+    anchor_groups = user_group_tensor[anchor_user_ids].to(device)  # [B]，第 i 個 anchor user 是 A(1) 還是 B(0)
 
-def user_aware_infonce_from_logits(logits: torch.Tensor, tau_vec: torch.Tensor,
-                                   reduction="sum") -> torch.Tensor:
-    """
-    logits: [B, B]，第 i 行第 i 列為正樣本（對角線）
-    tau_vec: [B]，逐列的溫度
-    """
-    logits = logits / tau_vec.unsqueeze(1)  # row-wise 溫度縮放
-    labels = torch.arange(logits.size(0), device=logits.device)
-    return F.cross_entropy(logits, labels, reduction=reduction)
+    all_groups = user_group_tensor.to(device)                      # [N]，column j 的全域 user 是 A(1) 還是 B(0)
+
+    # 只在 B-anchor × A-negative 的位置放大溫度
+    mask_anchor_B = (anchor_groups == 0).unsqueeze(1).expand(B, N)  # anchor i ∈ Group B，找出哪些列是 B？
+
+    mask_col_A = (all_groups == 1).unsqueeze(0).expand(B, N)        # candidate user j ∈ Group A，找出哪些欄是 A？
+
+    mask_B_to_A = mask_anchor_B & mask_col_A                        # anchor 在 B，且 negative 在 A。
+
+    if kappa != 1.0:
+        tau = torch.where(mask_B_to_A, tau * kappa, tau) #只對 B→A 的 logit 放大溫度。
+
+    scaled_logits = logits / tau
+
+    # 依照每格 tau 縮放 logits；正樣本 label 是全域 user id
+    labels = anchor_user_ids.to(device)
+    return F.cross_entropy(scaled_logits, labels, reduction=reduction)
+
 
 # === Group Contrastive Loss ===
-def group_contrastive_loss(user_embs1, user_embs2, user_ids, user_group_tensor, margin=0.5):
+def group_contrastive_loss(
+    user_embs1: torch.Tensor,
+    user_embs2: torch.Tensor,
+    user_ids: torch.Tensor,
+    user_group_tensor: torch.Tensor,
+    margin: float = 0.5,
+    neg_weight_B_anchor: float = 0.0,
+    neg_weight_A_anchor: float = 1.0,
+) -> torch.Tensor:
+    """
+    非對稱群組式對比損失：
+    - 仍強化同群的 hardest positive（A–A、B–B）
+    - 只有在 A 當 anchor 時，用權重 neg_weight_A_anchor 推遠 A–B
+    - 在 B 當 anchor 時，對 A 的負樣本給權重 neg_weight_B_anchor（建議 0 或很小）
+    參數：
+        neg_weight_B_anchor: B 當 anchor 時，針對跨群負樣本的權重（0~1）
+        neg_weight_A_anchor: A 當 anchor 時，針對跨群負樣本的權重（常用 1.0）
+    """
     device = user_embs1.device
-    user_group_tensor = user_group_tensor.to(user_ids.device)
-    groups = user_group_tensor[user_ids]  # [batch_size]
-    sim_matrix = F.cosine_similarity(user_embs1.unsqueeze(1), user_embs2.unsqueeze(0), dim=2)  # [batch, batch]
-    batch_size = user_embs1.size(0)
-    hardest_pos = []
-    hardest_neg = []
-    for i in range(batch_size):
-        pos_mask = (groups[i] == groups) & (torch.arange(batch_size, device=device) != i)
-        neg_mask = (groups[i] != groups)
-        pos_sims = sim_matrix[i][pos_mask]
-        neg_sims = sim_matrix[i][neg_mask]
+    groups = user_group_tensor.to(user_ids.device)[user_ids]  # [B]
+
+    # 算 batch 內兩兩 user 的相似度矩陣，例如第 i 列就是以第 i 個 user 當 anchor，跟所有 user（另一 view）的相似度。
+    sim_matrix = F.cosine_similarity(
+        user_embs1.unsqueeze(1), user_embs2.unsqueeze(0), dim=2
+    )  # [B, B]
+    B = user_embs1.size(0)
+
+    # 逐 anchor 蒐集 hardest pos/neg
+    pos_list = []
+    neg_list = []
+    neg_w_list = []
+
+    idxs = torch.arange(B, device=device)
+    for i in range(B):
+        same_mask = (groups == groups[i]) & (idxs != i)   # 同群（不含自己）
+        diff_mask = (groups != groups[i])                 # 異群
+
+        pos_sims = sim_matrix[i][same_mask] # 把這個 anchor i 對所有「同群人 j」的相似度撈出來
         if pos_sims.numel() > 0:
-            hardest_pos.append(pos_sims.min())
+            hardest_pos = pos_sims.min()  # 拉近最難的正樣本，把這個變成 anchor i 的代表正樣本 → 讓整個同群都要至少像它那麼近
         else:
-            hardest_pos.append(torch.tensor(0.0, device=device))
+            # 無同群樣本時，可設為 0（或跳過）；這裡設成 0 以使 loss 可微
+            hardest_pos = torch.tensor(0.0, device=device)
+
+        neg_sims = sim_matrix[i][diff_mask]
         if neg_sims.numel() > 0:
-            hardest_neg.append(neg_sims.max())
+            hardest_neg = neg_sims.max()  # 推遠最難的負樣本，把這個當作代表負樣本 → 讓所有異群至少比它還遠一些
         else:
-            hardest_neg.append(torch.tensor(0.0, device=device))
-    hardest_pos = torch.stack(hardest_pos)
-    hardest_neg = torch.stack(hardest_neg)
-    loss = F.relu(margin + hardest_neg - hardest_pos).mean()
-    return loss
+            hardest_neg = torch.tensor(0.0, device=device)
+
+        # 設定對稱性：A/B anchor 對跨群負樣本的權重
+        if groups[i].item() == 1:  # 代表 Group A
+            neg_w = neg_weight_A_anchor # A 當 anchor 的時候，有完整的 push B 的力道
+        else:                      # Group B
+            neg_w = neg_weight_B_anchor # B 當 anchor 的時候，幾乎不推 A
+
+        pos_list.append(hardest_pos)
+        neg_list.append(hardest_neg)
+        neg_w_list.append(torch.tensor(neg_w, device=device))
+
+    # 組合成 margin ranking loss
+    pos = torch.stack(pos_list)                 # [B]
+    neg = torch.stack(neg_list)                 # [B]
+    neg_w = torch.stack(neg_w_list)             # [B]
+
+    # margin ranking：margin + w*(neg - pos)
+    # B 當 anchor 時 w~0 → 幾乎不推 A；A 當 anchor w=1 → 正常推 B
+    loss_vec = F.relu(margin + neg_w * (neg - pos))
+    return loss_vec.mean()
+
 
 
 class _LightGCN(nn.Module):
@@ -221,9 +268,14 @@ class SGL(AbstractRecommender):
         self.ssl_ratio = config["ssl_ratio"]
         self.ssl_mode = config["ssl_mode"]
         self.ssl_temp = config["ssl_temp"]
+        try:
+            self.groupA_neg_temp_scale = config["groupA_neg_temp_scale"]
+        except Exception:
+            self.groupA_neg_temp_scale = 2.0  # 預設 κ
+
 
         # Hyper-parameters for Group Contrastive Loss
-        self.alpha_values = [0.0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
+        self.alpha_values = [0.0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0,5.5, 6.0, 7.0, 8.0]
         self.current_alpha_idx = 0
         self.alpha_results = {}
         self.alpha_search_epochs = 20
@@ -261,10 +313,20 @@ class SGL(AbstractRecommender):
         # 指定 Group A（示例，可換成你實際標註）
         group_a_ids = [50, 98, 118, 191, 260, 550, 735, 947, 1175, 1615]
 
+        # self.user_group_tensor 形狀是 [num_users]
+
+        # 值為 0 → Group B（沒買冷門）
+
+        # 值為 1 → Group A（買過冷門）
+
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.user_group_tensor = torch.zeros(self.num_users, dtype=torch.long)
         self.user_group_tensor[group_a_ids] = 1
         self.user_group_tensor = self.user_group_tensor.to(self.device)  # 一次搬上裝置
+
+        # 全域使用者的群組列向量（供 user-InfoNCE 的列/行遮罩用）
+        self.col_group = self.user_group_tensor.clone().to(self.device)  # [num_users]，1=A, 0=B
+
 
         # 初始圖
         adj_matrix = self.create_adj_mat()
@@ -277,15 +339,6 @@ class SGL(AbstractRecommender):
         else:
             self.lightgcn.reset_parameters(init_method=self.param_init)
         self.optimizer = torch.optim.Adam(self.lightgcn.parameters(), lr=self.lr)
-
-        # 使用者活躍度（不可含測試期資訊）
-        self.user_activity = self._build_user_activity_from_train()
-
-        # user-aware 溫度（可做消融調 mode/超參數）
-        self.user_temp_scheduler = UserAwareTemp(
-            tau_base=self.ssl_temp, mode="enhance_low",
-            alpha=0.5, beta=0.3, gamma=0.7, min_tau=0.03, max_tau=1.0
-        )
 
     def _build_user_activity_from_train(self):
         """
@@ -401,10 +454,22 @@ class SGL(AbstractRecommender):
                     self.lightgcn.item_embeddings(bat_neg_items),
                 )
 
-                # User-aware InfoNCE（user 端）
-                bat_user_activity = self.user_activity[bat_users]  # [B]
-                tau_i_users = self.user_temp_scheduler(bat_user_activity)  # [B]
-                user_infonce = user_aware_infonce_from_logits(ssl_logits_user, tau_i_users, reduction="sum")
+                # === Group-aware InfoNCE（群組化溫度，無個人化 τ_i） ===
+                # 基礎溫度：全為 self.ssl_temp
+                base_tau_users = torch.full(
+                    (bat_users.size(0),), self.ssl_temp, device=ssl_logits_user.device
+                )  # [B]
+
+                user_infonce = group_aware_infonce_full(
+                    logits=ssl_logits_user,                    # [B, num_users]
+                    anchor_user_ids=bat_users,                 # [B] 全域 user id
+                    user_group_tensor=self.user_group_tensor,  # [num_users]
+                    base_tau_vec=base_tau_users,               # [B]
+                    kappa=float(self.groupA_neg_temp_scale),   # κ
+                    reduction="sum"
+                )
+
+
 
                 # Item 端暫用固定溫度
                 item_logits = ssl_logits_item / self.ssl_temp
@@ -422,10 +487,13 @@ class SGL(AbstractRecommender):
 
                 user_embs1 = F.embedding(bat_users, _u_all_1)
                 user_embs2 = F.embedding(bat_users, _u_all_2)
-                group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users,
-                                                    self.user_group_tensor, margin=0.5)
-
-                
+                group_loss = group_contrastive_loss(
+                    user_embs1, user_embs2, bat_users, self.user_group_tensor,
+                    margin=0.5,
+                    neg_weight_B_anchor=0.0,   # B 當 anchor 不推 A（完全關閉）
+                    neg_weight_A_anchor=1.0,   # A 當 anchor 正常推 B
+                )
+           
                 # loss 組合
                 current_alpha = self.alpha_values[self.current_alpha_idx]
                 loss = bpr_loss + self.ssl_reg * infonce_loss + self.reg * reg_loss + current_alpha * group_loss
@@ -511,16 +579,21 @@ class SGL(AbstractRecommender):
                     self.lightgcn.item_embeddings(bat_neg_items),
                 )
 
-                # User-aware InfoNCE（user 端）
-                bat_user_activity = self.user_activity[bat_users]
-                tau_i_users = self.user_temp_scheduler(bat_user_activity)
+                # === Group-aware InfoNCE（群組化溫度，無個人化 τ_i） ===
+                base_tau_users = torch.full(
+                    (bat_users.size(0),), self.ssl_temp, device=ssl_logits_user.device
+                )  # [B]
 
-                # 統計整個 epoch 的 tau 平均
-                with torch.no_grad():
-                    sum_tau += tau_i_users.mean().item() * tau_i_users.size(0)
-                    cnt_tau += tau_i_users.size(0)
+                user_infonce = group_aware_infonce_full(
+                    logits=ssl_logits_user,
+                    anchor_user_ids=bat_users,
+                    user_group_tensor=self.user_group_tensor,
+                    base_tau_vec=base_tau_users,
+                    kappa=float(self.groupA_neg_temp_scale),
+                    reduction="sum"
+                )
 
-                user_infonce = user_aware_infonce_from_logits(ssl_logits_user, tau_i_users, reduction="sum")
+
 
                 # Item 端固定溫度
                 item_logits = ssl_logits_item / self.ssl_temp
@@ -538,8 +611,13 @@ class SGL(AbstractRecommender):
 
                 user_embs1 = F.embedding(bat_users, _u_all_1)
                 user_embs2 = F.embedding(bat_users, _u_all_2)
-                group_loss = group_contrastive_loss(user_embs1, user_embs2, bat_users,
-                                                    self.user_group_tensor, margin=0.5)
+                group_loss = group_contrastive_loss(
+                    user_embs1, user_embs2, bat_users, self.user_group_tensor,
+                    margin=0.5,
+                    neg_weight_B_anchor=0.0,   # B 當 anchor 不推 A
+                    neg_weight_A_anchor=1.0,   # A 當 anchor 正常推 B
+                )
+
 
 
 
@@ -553,8 +631,6 @@ class SGL(AbstractRecommender):
             self.logger.info("[Final training %d/%d : loss : %.4f, alpha: %.2f, time: %.2fs]" % (
                 epoch + 1, final_epochs, total_loss / self.num_ratings, self.best_alpha, time() - training_start_time
             ))
-            mean_tau = sum_tau / max(cnt_tau, 1)
-            self.logger.info(f"user-aware tau mean (epoch {epoch+1}): {mean_tau:.4f}")
 
         # ===== 僅輸出「傳播後」最終向量，不做評估 =====
         try:

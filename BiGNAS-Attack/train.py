@@ -147,36 +147,6 @@ def count_cold_item_occurrences(data, cold_item_set):
             item_count[i] += 1
     return item_count
 
-# def find_cold_item_strict(data, target_train_edge_index, target_test_edge_index):
-#     import numpy as np
-#     from collections import Counter
-
-#     train_edges = target_train_edge_index.cpu().numpy()
-#     test_edges = target_test_edge_index.cpu().numpy()
-#     overlap_users = set(data.raw_overlap_users.cpu().numpy())  # ⬅️ overlap user list
-
-#     # Step 1: 統計 overlap user 在 test set 中點擊的 item 次數
-#     test_user, test_item = test_edges
-#     item_counter = Counter()
-
-#     for u, i in zip(test_user, test_item):
-#         if u in overlap_users:
-#             item_counter[i] += 1
-
-#     candidate_items = {i for i, cnt in item_counter.items() if cnt == 1}
-
-#     train_items = set(train_edges[1])
-#     test_items = set(test_item)
-
-#     cold_items = [i for i in candidate_items if i not in train_items and i in test_items]
-
-#     if not cold_items:
-#         print("❌ 找不到符合條件的 cold item")
-#         return None
-
-#     selected = cold_items[0]
-#     print(f"🧊 Found cold item: {selected}")
-#     return selected
 
 def evaluate_er_hit_ratio(
     model, data, source_edge_index, target_edge_index,
@@ -649,8 +619,4 @@ def train(model, perceptor, data, args, split_result):
         cold_item_set={cold_item_id},   # 注意這邊是 set，不是 cold_item_id=
         device=device
     )
-        # === 存下 source_item_embedding ===
-    # source_emb = model.source_item_embedding.weight.detach().cpu().numpy()
-    # np.save("source_item_embedding.npy", source_emb)
-    # np.savetxt("source_item_embedding.csv", source_emb, delimiter=",")
-    # logging.info(f"✅ Saved source_item_embedding: shape={source_emb.shape}")
+
